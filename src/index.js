@@ -40,7 +40,7 @@ const cleanupTimer = setInterval(() => {
 cleanupTimer.unref();
 
 server.listen(config.port, config.host, () => {
-  console.log(`Blackjack backend listening on http://${config.host}:${config.port}`);
+  console.log(`listening on port ${config.port}`);
 });
 
 const shutdown = () => {

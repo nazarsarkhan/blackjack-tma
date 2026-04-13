@@ -7,6 +7,87 @@ const DEFAULT_STARTING_BALANCE = 1000;
 const DEFAULT_REFERRAL_REWARD = 500;
 const CARD_BACK_OPTIONS = ["classic", "neon", "ruby", "midnight", "royal"];
 const TABLE_THEME_OPTIONS = ["emerald", "ocean", "ember", "violet"];
+const REQUIRED_TABLE_COLUMNS = {
+  users: [
+    "id",
+    "telegram_id",
+    "username",
+    "first_name",
+    "last_name",
+    "balance",
+    "vip_status",
+    "total_stars_spent",
+    "last_daily_bonus_claimed_at",
+    "free_rounds",
+    "free_rounds_refreshed_at",
+    "total_wagered",
+    "total_won",
+    "games_played",
+    "referral_code",
+    "referred_by_user_id",
+    "avatar",
+    "card_back",
+    "table_theme",
+    "current_win_streak",
+    "best_win_streak",
+    "created_at",
+    "updated_at"
+  ],
+  games: [
+    "id",
+    "user_id",
+    "session_id",
+    "bet_amount",
+    "payout_amount",
+    "net_result",
+    "outcome",
+    "stake_source",
+    "player_hands_json",
+    "dealer_hand_json",
+    "finished_at",
+    "created_at"
+  ],
+  transactions: [
+    "id",
+    "user_id",
+    "game_id",
+    "type",
+    "amount",
+    "balance_before",
+    "balance_after",
+    "metadata_json",
+    "created_at"
+  ],
+  star_purchases: [
+    "id",
+    "user_id",
+    "package_id",
+    "stars_amount",
+    "chips_amount",
+    "telegram_payment_charge_id",
+    "metadata_json",
+    "created_at"
+  ],
+  user_achievements: [
+    "id",
+    "user_id",
+    "achievement_key",
+    "title",
+    "description",
+    "badge",
+    "reward_chips",
+    "metadata_json",
+    "unlocked_at"
+  ],
+  referrals: [
+    "id",
+    "referrer_user_id",
+    "referred_user_id",
+    "referral_code",
+    "reward_amount",
+    "created_at"
+  ]
+};
 
 const ACHIEVEMENTS = [
   {
@@ -147,6 +228,22 @@ class BlackjackDatabase {
     this.ensureStarPurchasesTable();
     this.ensureAchievementsTable();
     this.ensureReferralsTable();
+    this.validateSchema();
+  }
+
+  validateSchema() {
+    for (const [tableName, requiredColumns] of Object.entries(REQUIRED_TABLE_COLUMNS)) {
+      const columns = new Set(
+        this.db.prepare(`PRAGMA table_info(${tableName})`).all().map((column) => column.name)
+      );
+      const missingColumns = requiredColumns.filter((column) => !columns.has(column));
+
+      if (missingColumns.length > 0) {
+        throw new Error(
+          `Database schema mismatch for ${tableName}: missing columns ${missingColumns.join(", ")}`
+        );
+      }
+    }
   }
 
   ensureUsersColumns() {
