@@ -11,6 +11,7 @@ class SessionManager {
     this.maxBet = options.maxBet || 1000000;
     this.sessionTtlMs = options.sessionTtlMs || 1000 * 60 * 60 * 2;
     this.userStore = options.userStore || null;
+    this.monetizationService = options.monetizationService || null;
     this.sessions = new Map();
   }
 
@@ -19,7 +20,14 @@ class SessionManager {
       throw new Error("playerId is required");
     }
 
-    const user = this.userStore
+    const user = this.monetizationService
+      ? this.monetizationService.ensureUser({
+          telegramId: playerId,
+          username: metadata?.username || null,
+          firstName: metadata?.firstName || null,
+          lastName: metadata?.lastName || null
+        })
+      : this.userStore
       ? this.userStore.createOrGetUser({
           telegramId: playerId,
           username: metadata?.username || null,
@@ -31,11 +39,13 @@ class SessionManager {
     const session = {
       id: randomUUID(),
       playerId,
-      userId: user ? user.id : null,
+      userId: user ? user.userId || user.id : null,
       metadata,
       currentRound: null,
       history: [],
       balance: user ? user.balance : null,
+      freeRounds: user?.freeRounds ?? null,
+      vipStatus: user?.vipStatus ?? null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -57,10 +67,24 @@ class SessionManager {
   startRound(sessionId, bet) {
     const session = this.getSession(sessionId);
     const amount = this.validateBet(bet);
-    this.ensureAvailableBalance(session, amount);
 
     if (session.currentRound && session.currentRound.status !== "finished") {
       throw new Error("Current round must finish before starting a new one");
+    }
+
+    let stakeSource = "balance";
+    if (this.monetizationService && session.userId) {
+      const reservedStake = this.monetizationService.reserveRoundEntry({
+        userId: session.userId,
+        betAmount: amount,
+        sessionId: session.id
+      });
+      stakeSource = reservedStake.stakeSource;
+      session.balance = reservedStake.balance;
+      session.freeRounds = reservedStake.freeRounds;
+      session.vipStatus = reservedStake.vipStatus;
+    } else {
+      this.ensureAvailableBalance(session, amount);
     }
 
     const round = this.engine.createRound({
@@ -68,6 +92,7 @@ class SessionManager {
       playerId: session.playerId,
       bet: amount
     });
+    round.stakeSource = stakeSource;
 
     session.currentRound = round;
     session.history.unshift(round);
@@ -132,6 +157,7 @@ class SessionManager {
       betAmount: round.bet,
       payoutAmount: round.payout,
       outcome: this.mapRoundOutcome(round, presentedRound),
+      stakeSource: round.stakeSource || "balance",
       playerHands: [
         {
           cards: round.hands.player.cards,
@@ -150,6 +176,14 @@ class SessionManager {
 
     round.recordId = game.id;
     round.settledAt = new Date().toISOString();
+    if (this.monetizationService) {
+      const wallet = this.monetizationService.getWalletByUserId(session.userId);
+      session.balance = wallet.balance;
+      session.freeRounds = wallet.freeRounds;
+      session.vipStatus = wallet.vipStatus;
+      return;
+    }
+
     session.balance = this.userStore.getBalance(session.userId);
   }
 
@@ -176,6 +210,8 @@ class SessionManager {
       userId: session.userId,
       metadata: session.metadata,
       balance: session.balance,
+      freeRounds: session.freeRounds,
+      vipStatus: session.vipStatus,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       currentRound: session.currentRound

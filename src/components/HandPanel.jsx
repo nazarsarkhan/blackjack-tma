@@ -8,12 +8,12 @@ export default function HandPanel({ title, subtitle, score, cards, accent = "gol
           <p className="eyebrow">{subtitle}</p>
           <h2>{title}</h2>
         </div>
-        <div className="score-chip">{score}</div>
+        <div className="score-chip">{score?.total ?? "?"}</div>
       </div>
 
       <div className="cards-row">
         {cards.map((card, index) => (
-          <Card key={`${card.suit}-${card.value}-${index}`} card={card} index={index} />
+          <Card key={`${card.code ?? card.suit ?? "hidden"}-${card.rank ?? index}-${index}`} card={card} index={index} />
         ))}
       </div>
     </section>

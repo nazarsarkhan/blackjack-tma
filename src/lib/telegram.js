@@ -8,8 +8,8 @@ export function initTelegramApp() {
   tg.ready();
   tg.expand();
   tg.enableClosingConfirmation();
-  tg.setHeaderColor("#102f27");
-  tg.setBackgroundColor("#113325");
+  tg.setHeaderColor("#0d3b2a");
+  tg.setBackgroundColor("#072319");
 
   return tg;
 }

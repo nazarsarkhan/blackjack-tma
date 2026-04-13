@@ -13,7 +13,9 @@ const parseErrorStatus = (message) => {
     message.includes("Unsupported") ||
     message.includes("not accepting") ||
     message.includes("only allowed") ||
-    message.includes("Insufficient balance")
+    message.includes("Insufficient balance") ||
+    message.includes("already claimed") ||
+    message.includes("Unknown Stars package")
   ) {
     return 400;
   }
@@ -27,6 +29,11 @@ const parsePagination = (req) => ({
 });
 
 const getUserOr404 = (userStore, telegramId, res) => {
+  if (!userStore) {
+    res.status(500).json({ error: "User store is not configured" });
+    return null;
+  }
+
   const user = userStore.getUserByTelegramId(telegramId);
   if (!user) {
     res.status(404).json({ error: "User not found" });
@@ -36,7 +43,7 @@ const getUserOr404 = (userStore, telegramId, res) => {
   return user;
 };
 
-const createApp = ({ sessionManager, userStore }) => {
+const createApp = ({ sessionManager, userStore, monetizationService = null }) => {
   const app = express();
   const distPath = path.resolve(__dirname, "../../dist");
 
@@ -54,12 +61,19 @@ const createApp = ({ sessionManager, userStore }) => {
 
   app.post("/api/users", (req, res) => {
     try {
-      const user = userStore.createOrGetUser({
-        telegramId: req.body.telegramId,
-        username: req.body.username || null,
-        firstName: req.body.firstName || null,
-        lastName: req.body.lastName || null
-      });
+      const user = monetizationService
+        ? monetizationService.ensureUser({
+            telegramId: req.body.telegramId,
+            username: req.body.username || null,
+            firstName: req.body.firstName || null,
+            lastName: req.body.lastName || null
+          })
+        : userStore.createOrGetUser({
+            telegramId: req.body.telegramId,
+            username: req.body.username || null,
+            firstName: req.body.firstName || null,
+            lastName: req.body.lastName || null
+          });
 
       res.status(201).json(user);
     } catch (error) {
@@ -80,6 +94,18 @@ const createApp = ({ sessionManager, userStore }) => {
 
   app.get("/api/users/:telegramId/balance", (req, res) => {
     try {
+      if (monetizationService) {
+        const wallet = monetizationService.getWalletByTelegramId(req.params.telegramId);
+        res.json({
+          userId: wallet.userId,
+          telegramId: wallet.telegramId,
+          balance: wallet.balance,
+          freeRounds: wallet.freeRounds,
+          vipStatus: wallet.vipStatus
+        });
+        return;
+      }
+
       const user = getUserOr404(userStore, req.params.telegramId, res);
       if (user) {
         res.json({
@@ -88,6 +114,60 @@ const createApp = ({ sessionManager, userStore }) => {
           balance: user.balance
         });
       }
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/users/:telegramId/wallet", (req, res) => {
+    try {
+      if (!monetizationService) {
+        res.status(501).json({ error: "Monetization service is not configured" });
+        return;
+      }
+
+      res.json(monetizationService.getWalletByTelegramId(req.params.telegramId));
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/users/:telegramId/bonuses/daily", (req, res) => {
+    try {
+      if (!monetizationService) {
+        res.status(501).json({ error: "Monetization service is not configured" });
+        return;
+      }
+
+      res.json(monetizationService.claimDailyBonus(req.params.telegramId));
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/monetization/packages", (_req, res) => {
+    if (!monetizationService) {
+      res.status(501).json({ error: "Monetization service is not configured" });
+      return;
+    }
+
+    res.json(monetizationService.getStarPackages());
+  });
+
+  app.post("/api/users/:telegramId/purchases/stars", (req, res) => {
+    try {
+      if (!monetizationService) {
+        res.status(501).json({ error: "Monetization service is not configured" });
+        return;
+      }
+
+      res.status(201).json(
+        monetizationService.purchaseStarsPackage(
+          req.params.telegramId,
+          req.body.packageId,
+          req.body.telegramPaymentChargeId || null
+        )
+      );
     } catch (error) {
       res.status(parseErrorStatus(error.message)).json({ error: error.message });
     }

@@ -1,6 +1,7 @@
 const http = require("node:http");
 const config = require("./config");
 const { BlackjackDatabase } = require("./db");
+const { MonetizationService } = require("./services/monetizationService");
 const { SessionManager } = require("./services/sessionManager");
 const { createApp } = require("./server/createApp");
 const { createWebSocketServer } = require("./server/websocket");
@@ -10,16 +11,21 @@ const userStore = new BlackjackDatabase({
   startingBalance: config.startingBalance
 });
 
+const monetizationService = new MonetizationService({
+  userStore
+});
+
 const sessionManager = new SessionManager({
   deckCount: config.defaultDeckCount,
   reshufflePenetration: config.reshufflePenetration,
   minBet: config.minBet,
   maxBet: config.maxBet,
   sessionTtlMs: config.sessionTtlMs,
-  userStore
+  userStore,
+  monetizationService
 });
 
-const app = createApp({ sessionManager, userStore });
+const app = createApp({ sessionManager, userStore, monetizationService });
 const server = http.createServer(app);
 
 createWebSocketServer({
