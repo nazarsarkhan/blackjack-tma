@@ -556,10 +556,12 @@ class BlackjackDatabase {
       }
 
       const nowIso = toIsoString(now);
+      const nowTimestamp = new Date(nowIso).getTime();
       const refreshedAt = user.freeRoundsRefreshedAt
         ? new Date(user.freeRoundsRefreshedAt).getTime()
         : 0;
-      const shouldRefresh = !refreshedAt || new Date(nowIso).getTime() - refreshedAt >= intervalMs;
+      const elapsedMs = nowTimestamp - refreshedAt;
+      const shouldRefresh = !refreshedAt || elapsedMs >= intervalMs || elapsedMs < 0;
       if (shouldRefresh) {
         const nextFreeRounds = Math.max(user.freeRounds, targetCount);
         this.statements.updateFreeRounds.run(nextFreeRounds, nowIso, userId);
