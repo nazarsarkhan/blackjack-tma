@@ -6,7 +6,27 @@ const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"]
 
 const defaultDemoState = {
   balance: 1000,
-  history: []
+  history: [],
+  achievements: [],
+  customization: {
+    avatar: "🂡",
+    cardBack: "classic",
+    tableTheme: "emerald",
+    options: {
+      avatars: ["🂡", "🂮", "🂭", "🃏", "🎩", "🦈"],
+      cardBacks: ["classic", "neon", "ruby", "midnight", "royal"],
+      tableThemes: ["emerald", "ocean", "ember", "violet"]
+    }
+  },
+  referral: {
+    referralCode: "DEMO500",
+    referralReward: 500,
+    referredCount: 0,
+    earnedChips: 0,
+    referredByUserId: null,
+    link: "https://t.me/demo_blackjack_bot?startapp=ref_DEMO500",
+    recentReferrals: []
+  }
 };
 
 function getPlayerId(user) {
@@ -281,18 +301,85 @@ function mapDemoHistoryItem(item) {
 }
 
 function calculateDemoStats(state) {
+  const wins = state.history.filter((item) => ["win", "blackjack"].includes(item.outcome)).length;
+  const blackjacks = state.history.filter((item) => item.outcome === "blackjack").length;
+
   const stats = {
     balance: state.balance,
     gamesPlayed: state.history.length,
     totalWagered: state.history.reduce((sum, item) => sum + item.betAmount, 0),
     totalWon: state.history.reduce((sum, item) => sum + item.payoutAmount, 0),
-    wins: state.history.filter((item) => ["win", "blackjack"].includes(item.outcome)).length,
+    wins,
     pushes: state.history.filter((item) => item.outcome === "push").length,
     losses: state.history.filter((item) => ["lose", "bust"].includes(item.outcome)).length,
-    lastGameAt: state.history[0]?.finishedAt ?? null
+    blackjacks,
+    winRate: state.history.length ? wins / state.history.length : 0,
+    currentWinStreak: 0,
+    bestWinStreak: 0,
+    lastGameAt: state.history[0]?.finishedAt ?? null,
+    favoriteBets: [...new Map(state.history.map((item) => [item.betAmount, 0])).keys()]
+      .map((betAmount) => ({
+        betAmount,
+        rounds: state.history.filter((item) => item.betAmount === betAmount).length
+      }))
+      .sort((left, right) => right.rounds - left.rounds || right.betAmount - left.betAmount)
+      .slice(0, 3)
   };
 
   return stats;
+}
+
+function createDemoTournament(state, user) {
+  const playerId = getPlayerId(user);
+  const wins = state.history.filter((item) => ["win", "blackjack"].includes(item.outcome)).length;
+  const blackjacks = state.history.filter((item) => item.outcome === "blackjack").length;
+  const netResult = state.history.reduce((sum, item) => sum + item.netResult, 0);
+  const points = wins * 6 + blackjacks * 4 + Math.max(0, Math.floor(netResult / 100));
+
+  return {
+    title: "Weekly High Rollers",
+    startsAt: new Date().toISOString(),
+    endsAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    prizePoolChips: 40500,
+    leaderboard: [
+      {
+        rank: 1,
+        userId: playerId,
+        telegramId: playerId,
+        displayName: user?.first_name ?? "Гость",
+        username: user?.username ?? "demo_player",
+        avatar: state.customization.avatar,
+        points,
+        netResult,
+        wins,
+        blackjacks,
+        rounds: state.history.length,
+        prizeChips: 10000
+      }
+    ],
+    yourStanding: {
+      rank: 1,
+      userId: playerId,
+      telegramId: playerId,
+      displayName: user?.first_name ?? "Гость",
+      username: user?.username ?? "demo_player",
+      avatar: state.customization.avatar,
+      points,
+      netResult,
+      wins,
+      blackjacks,
+      rounds: state.history.length,
+      prizeChips: 10000
+    },
+    prizes: [
+      { rank: "1", chips: 10000 },
+      { rank: "2", chips: 5000 },
+      { rank: "3", chips: 2500 },
+      { rank: "4-10", chips: 1000 },
+      { rank: "11-25", chips: 500 },
+      { rank: "26-100", chips: 250 }
+    ]
+  };
 }
 
 function createDemoSession(user) {
@@ -304,7 +391,8 @@ function createDemoSession(user) {
     userId: getPlayerId(user),
     balance: state.balance,
     currentRound: null,
-    history: []
+    history: [],
+    customization: state.customization
   };
 }
 
@@ -321,7 +409,16 @@ function bootstrapDemo(user) {
     },
     session: createDemoSession(user),
     history: state.history.map(mapDemoHistoryItem),
-    stats: calculateDemoStats(state)
+    stats: calculateDemoStats(state),
+    achievements: state.achievements,
+    referral: state.referral,
+    customization: state.customization,
+    tournament: createDemoTournament(state, user),
+    security: {
+      provider: "demo",
+      userKey: getPlayerId(user),
+      antiMultiAccount: false
+    }
   };
 }
 
@@ -469,7 +566,24 @@ function deriveWsUrl() {
   return `${protocol}//${window.location.host}/ws`;
 }
 
-export async function bootstrapGame(user) {
+async function maybeClaimReferral(playerId, startParam) {
+  if (!startParam?.startsWith("ref_")) {
+    return null;
+  }
+
+  try {
+    return await request(`/api/users/${playerId}/referrals/claim`, {
+      method: "POST",
+      body: JSON.stringify({
+        referralCode: startParam.slice(4)
+      })
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function bootstrapGame(user, startParam = null) {
   try {
     const playerId = getPlayerId(user);
     const player = await request("/api/users", {
@@ -481,6 +595,8 @@ export async function bootstrapGame(user) {
         lastName: user?.last_name ?? null
       })
     });
+
+    await maybeClaimReferral(playerId, startParam);
 
     const session = await request("/api/sessions", {
       method: "POST",
@@ -494,17 +610,29 @@ export async function bootstrapGame(user) {
       })
     });
 
-    const [history, stats] = await Promise.all([
-      request(`/api/users/${playerId}/games?limit=12`),
-      request(`/api/users/${playerId}/stats`)
+    const [history, profile] = await Promise.all([
+      request(`/api/users/${playerId}/games?limit=50`),
+      request(`/api/users/${playerId}/profile`)
     ]);
 
     return {
       isDemo: false,
       player,
-      session,
+      session: {
+        ...session,
+        customization: profile.customization
+      },
       history,
-      stats
+      stats: profile.stats,
+      achievements: profile.achievements,
+      referral: profile.referral,
+      customization: profile.customization,
+      tournament: profile.tournament,
+      security: {
+        provider: "telegram_user_id",
+        userKey: player.telegramId,
+        antiMultiAccount: true
+      }
     };
   } catch {
     return bootstrapDemo(user);
@@ -516,16 +644,71 @@ export async function refreshProfile(playerId, isDemo = false) {
     const state = getDemoState();
     return {
       history: state.history.map(mapDemoHistoryItem),
-      stats: calculateDemoStats(state)
+      stats: calculateDemoStats(state),
+      achievements: state.achievements,
+      referral: state.referral,
+      customization: state.customization,
+      tournament: createDemoTournament(state)
     };
   }
 
-  const [history, stats] = await Promise.all([
-    request(`/api/users/${playerId}/games?limit=12`),
-    request(`/api/users/${playerId}/stats`)
+  const [history, profile] = await Promise.all([
+    request(`/api/users/${playerId}/games?limit=50`),
+    request(`/api/users/${playerId}/profile`)
   ]);
 
-  return { history, stats };
+  return {
+    history,
+    stats: profile.stats,
+    achievements: profile.achievements,
+    referral: profile.referral,
+    customization: profile.customization,
+    tournament: profile.tournament
+  };
+}
+
+export async function saveCustomization(playerId, payload, isDemo = false) {
+  if (isDemo) {
+    const state = getDemoState();
+    const customization = {
+      ...state.customization,
+      ...payload
+    };
+
+    saveDemoState({
+      ...state,
+      customization
+    });
+
+    return customization;
+  }
+
+  return request(`/api/users/${playerId}/customization`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function claimReferral(playerId, referralCode, isDemo = false) {
+  if (isDemo) {
+    const state = getDemoState();
+    const referral = {
+      ...state.referral,
+      referredByUserId: "demo-referrer"
+    };
+
+    saveDemoState({
+      ...state,
+      referral
+    });
+
+    return referral;
+  }
+
+  return request(`/api/users/${playerId}/referrals/claim`, {
+    method: "POST",
+    body: JSON.stringify({ referralCode })
+  });
 }
 
 export async function startRound({ session, bet, isDemo }) {

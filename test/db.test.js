@@ -171,13 +171,14 @@ test("recordCompletedGame respects free-round stake source", () => {
 
     assert.equal(game.netResult, 250);
     assert.equal(game.stakeSource, "free_round");
-    assert.equal(db.getUserById(user.id).balance, 1250);
+    assert.equal(db.getUserById(user.id).balance, 1550);
 
     const transactions = db.getTransactions(user.id);
     assert.deepEqual(
       transactions.map((entry) => entry.type),
-      ["payout"]
+      ["achievement_reward", "payout"]
     );
+    assert.equal(db.getAchievements(user.id)[0].achievementKey, "first_blackjack");
   } finally {
     db.close();
   }

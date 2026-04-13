@@ -75,7 +75,7 @@ test("session manager settles free-round wins without debiting balance", () => {
     assert.equal(started.freeRounds, 2);
 
     const finished = manager.applyAction(session.id, "stand");
-    assert.equal(finished.balance, 1250);
+    assert.equal(finished.balance, 1550);
     assert.equal(finished.freeRounds, 2);
 
     const history = db.getGameHistory(finished.userId);

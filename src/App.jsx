@@ -1,85 +1,105 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useTranslation } from "react-i18next";
 import ControlButton from "./components/ControlButton";
 import HandPanel from "./components/HandPanel";
 import { playSound, unlockAudio } from "./lib/audio";
 import {
   applyRoundAction,
   bootstrapGame,
+  claimReferral,
   connectSessionSocket,
   refreshProfile,
+  saveCustomization,
   startRound
 } from "./lib/gameClient";
-import {
-  clearPersistedLanguage,
-  detectPreferredLanguage,
-  isLanguagePersisted,
-  isRtlLanguage,
-  normalizeLanguageCode,
-  persistLanguage,
-  SUPPORTED_LANGUAGES
-} from "./i18n";
-import {
-  bindViewportCssVars,
-  getTelegramContext,
-  haptic,
-  initTelegramApp,
-  setupMainButton
-} from "./lib/telegram";
+import { getTelegramContext, haptic, initTelegramApp, setupMainButton } from "./lib/telegram";
 
-const chipPacks = [
-  { id: "bronze", amount: 2500, stars: 49, accent: "bronze" },
-  { id: "silver", amount: 7000, stars: 99, accent: "silver" },
-  { id: "gold", amount: 15000, stars: 179, accent: "gold" },
-  { id: "vip", amount: 40000, stars: 399, accent: "platinum" }
+const screens = [
+  { id: "lobby", label: "Лобби" },
+  { id: "table", label: "Стол" },
+  { id: "social", label: "Турниры" },
+  { id: "profile", label: "Профиль" },
+  { id: "history", label: "История" },
+  { id: "shop", label: "Фишки" }
 ];
 
-function mapOutcomeLabel(outcome, t) {
-  const mapping = {
-    win: "outcomes.win",
-    lose: "outcomes.lose",
-    blackjack: "outcomes.blackjack",
-    bust: "outcomes.bust",
-    push: "outcomes.push",
-    player_win: "results.player_win",
-    player_blackjack: "results.player_blackjack",
-    dealer_win: "results.dealer_win",
-    dealer_blackjack: "results.dealer_blackjack"
-  };
+const resultMeta = {
+  player_win: { label: "Выигрыш", tone: "win" },
+  player_blackjack: { label: "Blackjack 3:2", tone: "win" },
+  dealer_win: { label: "Казино забрало банк", tone: "lose" },
+  dealer_blackjack: { label: "У дилера blackjack", tone: "lose" },
+  push: { label: "Push", tone: "push" }
+};
 
-  return t(mapping[outcome] ?? "common.noGames");
+const chipPacks = [
+  { id: "bronze", title: "Bronze Stack", amount: 2500, stars: 49, accent: "bronze" },
+  { id: "silver", title: "Silver Stack", amount: 7000, stars: 99, accent: "silver" },
+  { id: "gold", title: "Gold Vault", amount: 15000, stars: 179, accent: "gold" },
+  { id: "vip", title: "Platinum Room", amount: 40000, stars: 399, accent: "platinum" }
+];
+
+const cardBackLabels = {
+  classic: "Classic",
+  neon: "Neon",
+  ruby: "Ruby",
+  midnight: "Midnight",
+  royal: "Royal"
+};
+
+const tableThemeLabels = {
+  emerald: "Emerald",
+  ocean: "Ocean",
+  ember: "Ember",
+  violet: "Violet"
+};
+
+const themeStyles = {
+  emerald: { "--felt-main": "#0f5134", "--felt-glow": "rgba(54, 166, 110, 0.36)", "--accent": "#e3bb67" },
+  ocean: { "--felt-main": "#12425e", "--felt-glow": "rgba(77, 181, 239, 0.32)", "--accent": "#8fd6ff" },
+  ember: { "--felt-main": "#5a291d", "--felt-glow": "rgba(255, 130, 84, 0.28)", "--accent": "#ffb269" },
+  violet: { "--felt-main": "#40265a", "--felt-glow": "rgba(190, 134, 255, 0.3)", "--accent": "#d6b4ff" }
+};
+
+function formatNumber(value) {
+  return new Intl.NumberFormat("ru-RU").format(value ?? 0);
+}
+
+function formatDate(value) {
+  if (!value) {
+    return "Нет данных";
+  }
+
+  return new Intl.DateTimeFormat("ru-RU", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function formatPercent(value) {
+  return `${Math.round((value ?? 0) * 100)}%`;
+}
+
+function getSeatSubtitle(user) {
+  return user?.username ? `@${user.username}` : user?.firstName ?? "Seat 1";
+}
+
+function mergeSessionCustomization(session, customization) {
+  return {
+    ...session,
+    customization: {
+      ...session?.customization,
+      avatar: customization?.avatar ?? session?.customization?.avatar ?? "🂡",
+      cardBack: customization?.cardBack ?? session?.customization?.cardBack ?? "classic",
+      tableTheme: customization?.tableTheme ?? session?.customization?.tableTheme ?? "emerald"
+    }
+  };
 }
 
 export default function App() {
   const telegram = useMemo(() => getTelegramContext(), []);
-  const detectedLanguage = useMemo(
-    () => normalizeLanguageCode(telegram.user?.language_code),
-    [telegram.user?.language_code]
-  );
-  const [language, setLanguage] = useState(() => detectPreferredLanguage(telegram.user?.language_code));
-  const [manualLanguage, setManualLanguage] = useState(() => isLanguagePersisted());
-  const { t, i18n } = useTranslation();
-  const screens = useMemo(
-    () => [
-      { id: "lobby", label: t("screens.lobby") },
-      { id: "table", label: t("screens.table") },
-      { id: "history", label: t("screens.history") },
-      { id: "shop", label: t("screens.shop") },
-      { id: "settings", label: t("screens.settings") }
-    ],
-    [t]
-  );
-  const resultMeta = useMemo(
-    () => ({
-      player_win: { label: t("results.player_win"), tone: "win" },
-      player_blackjack: { label: t("results.player_blackjack"), tone: "win" },
-      dealer_win: { label: t("results.dealer_win"), tone: "lose" },
-      dealer_blackjack: { label: t("results.dealer_blackjack"), tone: "lose" },
-      push: { label: t("results.push"), tone: "push" }
-    }),
-    [t]
-  );
+  const [referralInput, setReferralInput] = useState("");
   const [appState, setAppState] = useState({
     loading: true,
     busy: false,
@@ -91,43 +111,11 @@ export default function App() {
     bet: 100
   });
 
-  const numberFormatter = useMemo(() => new Intl.NumberFormat(language), [language]);
-  const dateFormatter = useMemo(
-    () =>
-      new Intl.DateTimeFormat(language, {
-        day: "2-digit",
-        month: "short",
-        hour: "2-digit",
-        minute: "2-digit"
-      }),
-    [language]
-  );
-
-  const formatNumber = (value) => numberFormatter.format(value ?? 0);
-  const formatDate = (value) => (value ? dateFormatter.format(new Date(value)) : t("common.noGames"));
-  const formatChips = (value) => `${formatNumber(value)} ${t("common.chips")}`;
-  const getSeatSubtitle = (user) => (user?.username ? `@${user.username}` : user?.firstName ?? t("common.seatFallback"));
-  const getHandStatus = (hand, roundStatus) => {
-    if (hand?.isActive && roundStatus === "player_turn") {
-      return t("table.yourTurn");
-    }
-
-    return hand?.outcome ? mapOutcomeLabel(hand.outcome, t) : t("table.inPlay");
-  };
-
-  useEffect(() => {
-    i18n.changeLanguage(language);
-    document.documentElement.lang = language;
-    document.documentElement.dir = isRtlLanguage(language) ? "rtl" : "ltr";
-  }, [i18n, language]);
-
   useEffect(() => {
     initTelegramApp();
-    const cleanupViewport = bindViewportCssVars();
 
     let mounted = true;
-
-    bootstrapGame(telegram.user).then((data) => {
+    bootstrapGame(telegram.user, telegram.startParam).then((data) => {
       if (!mounted) {
         return;
       }
@@ -143,9 +131,8 @@ export default function App() {
 
     return () => {
       mounted = false;
-      cleanupViewport();
     };
-  }, [telegram.user]);
+  }, [telegram.startParam, telegram.user]);
 
   useEffect(() => {
     const sessionId = appState.data?.session?.id;
@@ -162,7 +149,7 @@ export default function App() {
           data: current.data
             ? {
                 ...current.data,
-                session
+                session: mergeSessionCustomization(session, current.data.customization)
               }
             : current.data
         }));
@@ -170,11 +157,11 @@ export default function App() {
       onError: (message) => {
         setAppState((current) => ({
           ...current,
-          toast: message || t("toasts.socketError")
+          toast: message || "Ошибка сокета"
         }));
       }
     });
-  }, [appState.data?.isDemo, appState.data?.session?.id, t]);
+  }, [appState.data?.isDemo, appState.data?.session?.id]);
 
   useEffect(() => {
     const data = appState.data;
@@ -188,12 +175,12 @@ export default function App() {
       appState.activeScreen === "table"
         ? round
           ? roundFinished
-            ? t("mainButton.newRound")
-            : t("mainButton.stand")
-          : t("mainButton.takeSeat")
+            ? "Новая раздача"
+            : "Stand"
+          : "Сесть за стол"
         : appState.activeScreen === "shop"
-          ? t("mainButton.openShop")
-          : t("mainButton.toTable");
+          ? "Открыть магазин"
+          : "К столу";
 
     return setupMainButton({
       text,
@@ -205,12 +192,10 @@ export default function App() {
         }
 
         if (appState.activeScreen === "shop") {
-          startTransition(() => {
-            setAppState((current) => ({
-              ...current,
-              toast: t("toasts.shopUnavailable")
-            }));
-          });
+          setAppState((current) => ({
+            ...current,
+            toast: "Telegram Stars UI подключён, backend-платёж уже можно привязать к пакетам."
+          }));
           return;
         }
 
@@ -227,7 +212,7 @@ export default function App() {
         handleAction("stand");
       }
     });
-  }, [appState.activeScreen, appState.busy, appState.data, t, telegram.isTelegram]);
+  }, [appState.activeScreen, appState.busy, appState.data, telegram.isTelegram]);
 
   async function syncProfile(isDemo = appState.data?.isDemo, playerId = appState.data?.player?.telegramId) {
     if (!playerId) {
@@ -242,7 +227,12 @@ export default function App() {
           ? {
               ...current.data,
               history: profile.history,
-              stats: profile.stats
+              stats: profile.stats,
+              achievements: profile.achievements,
+              referral: profile.referral,
+              customization: profile.customization,
+              tournament: profile.tournament,
+              session: mergeSessionCustomization(current.data.session, profile.customization)
             }
           : current.data
       }));
@@ -288,7 +278,7 @@ export default function App() {
         data: current.data
           ? {
               ...current.data,
-              session
+              session: mergeSessionCustomization(session, current.data.customization)
             }
           : current.data
       }));
@@ -329,7 +319,7 @@ export default function App() {
         data: current.data
           ? {
               ...current.data,
-              session
+              session: mergeSessionCustomization(session, current.data.customization)
             }
           : current.data
       }));
@@ -356,16 +346,88 @@ export default function App() {
     }
   }
 
-  function handleLanguageSelect(code) {
-    persistLanguage(code);
-    setManualLanguage(true);
-    setLanguage(normalizeLanguageCode(code));
+  async function handleCustomization(field, value) {
+    if (!appState.data?.player?.telegramId) {
+      return;
+    }
+
+    setAppState((current) => ({ ...current, busy: true, toast: "" }));
+
+    try {
+      const customization = await saveCustomization(
+        String(appState.data.player.telegramId),
+        {
+          ...appState.data.customization,
+          [field]: value
+        },
+        appState.data.isDemo
+      );
+
+      setAppState((current) => ({
+        ...current,
+        busy: false,
+        data: current.data
+          ? {
+              ...current.data,
+              customization,
+              session: mergeSessionCustomization(current.data.session, customization)
+            }
+          : current.data,
+        toast: "Кастомизация сохранена"
+      }));
+    } catch (error) {
+      setAppState((current) => ({
+        ...current,
+        busy: false,
+        toast: error.message
+      }));
+    }
   }
 
-  function handleAutoLanguage() {
-    clearPersistedLanguage();
-    setManualLanguage(false);
-    setLanguage(detectedLanguage);
+  async function handleReferralSubmit() {
+    const playerId = appState.data?.player?.telegramId;
+    if (!playerId || !referralInput.trim()) {
+      return;
+    }
+
+    setAppState((current) => ({ ...current, busy: true, toast: "" }));
+
+    try {
+      const referral = await claimReferral(String(playerId), referralInput.trim(), appState.data.isDemo);
+      setReferralInput("");
+      setAppState((current) => ({
+        ...current,
+        busy: false,
+        data: current.data
+          ? {
+              ...current.data,
+              referral
+            }
+          : current.data,
+        toast: "Реферальный код активирован"
+      }));
+      await syncProfile();
+    } catch (error) {
+      setAppState((current) => ({
+        ...current,
+        busy: false,
+        toast: error.message
+      }));
+    }
+  }
+
+  async function handleCopyReferral() {
+    const link = appState.data?.referral?.link;
+    if (!link) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(link);
+      setAppState((current) => ({ ...current, toast: "Реферальная ссылка скопирована" }));
+    } catch {
+      setAppState((current) => ({ ...current, toast: link }));
+    }
   }
 
   if (appState.loading || !appState.data) {
@@ -376,7 +438,7 @@ export default function App() {
           animate={{ scale: [0.92, 1, 0.92], rotate: [0, 10, -10, 0] }}
           transition={{ duration: 2.4, repeat: Number.POSITIVE_INFINITY }}
         />
-        <p>{t("loading.connecting")}</p>
+        <p>Подключаемся к столу...</p>
       </main>
     );
   }
@@ -386,28 +448,36 @@ export default function App() {
   const roundMeta = round ? resultMeta[round.outcome] : null;
   const canStart = !round || round.status === "finished";
   const stats = data.stats ?? {};
-  const playerHands =
-    round?.playerHands ?? (round?.hands?.player ? [{ ...round.hands.player, bet: round?.bet, isActive: true }] : []);
-  const activeHand = playerHands.find((hand) => hand.isActive) ?? playerHands[0] ?? null;
-  const isSplitRound = playerHands.length > 1;
+  const customization = data.customization ?? {};
+  const tournament = data.tournament ?? { leaderboard: [], prizes: [] };
+  const profileStyle = themeStyles[customization.tableTheme] ?? themeStyles.emerald;
 
   return (
-    <main className="app-shell">
+    <main
+      className={`app-shell card-back-${customization.cardBack ?? "classic"}`}
+      style={profileStyle}
+      data-theme={customization.tableTheme ?? "emerald"}
+    >
       <div className="ambient ambient-left" />
       <div className="ambient ambient-right" />
 
       <section className="table-frame">
         <header className="app-topbar">
           <div>
-            <p className="eyebrow">{t("topbar.eyebrow")}</p>
+            <p className="eyebrow">Telegram Mini App</p>
             <h1>Blackjack Royale</h1>
-            <p className="topbar-copy">{t("topbar.subtitle")}</p>
+            <p className="topbar-copy">
+              Еженедельные турниры, ачивки, рефералка, кастомизация стола и подробная статистика в одном лобби.
+            </p>
           </div>
 
           <div className="topbar-side">
             <div className="profile-pill">
-              <span>{telegram.user?.first_name ?? data.player.firstName ?? t("topbar.guest")}</span>
-              <strong>{formatChips(data.session.balance ?? data.player.balance)}</strong>
+              <span className="avatar-coin">{customization.avatar ?? "🂡"}</span>
+              <div>
+                <span>{telegram.user?.first_name ?? data.player.firstName ?? "Гость"}</span>
+                <strong>{formatNumber(data.session.balance ?? data.player.balance)} chips</strong>
+              </div>
             </div>
             <button
               className="sound-toggle"
@@ -419,15 +489,15 @@ export default function App() {
                 }))
               }
             >
-              {appState.soundsEnabled ? t("topbar.soundOn") : t("topbar.soundOff")}
+              {appState.soundsEnabled ? "Sound On" : "Sound Off"}
             </button>
             <div className={`connection-pill ${appState.connectionState}`}>
-              {appState.connectionState === "live" ? t("topbar.live") : t("topbar.demo")}
+              {appState.connectionState === "live" ? "LIVE" : "DEMO"}
             </div>
           </div>
         </header>
 
-        <nav className="screen-tabs" aria-label={t("nav.aria")}>
+        <nav className="screen-tabs" aria-label="Навигация">
           {screens.map((screen) => (
             <button
               key={screen.id}
@@ -452,12 +522,14 @@ export default function App() {
             {appState.activeScreen === "lobby" && (
               <section className="lobby-grid">
                 <article className="hero-panel">
-                  <p className="eyebrow">{t("lobby.eyebrow")}</p>
-                  <h2>{t("lobby.title")}</h2>
-                  <p>{t("lobby.description")}</p>
+                  <p className="eyebrow">Лобби</p>
+                  <h2>Быстрые раздачи, weekly leaderboard и прогресс игрока</h2>
+                  <p>
+                    House edge соблюдён, а поверх него добавлены турниры, награды за прогресс, реферальная ссылка и персонализация стола.
+                  </p>
 
                   <div className="bet-strip">
-                    {[50, 100, 250, 500].map((value) => (
+                    {[50, 100, 250, 500, 1000].map((value) => (
                       <button
                         key={value}
                         type="button"
@@ -474,10 +546,10 @@ export default function App() {
                       onClick={canStart ? handleStartRound : () => navigate("table")}
                       disabled={appState.busy}
                     >
-                      {canStart ? t("lobby.startRound") : t("lobby.currentTable")}
+                      {canStart ? "Начать раздачу" : "К текущему столу"}
                     </ControlButton>
-                    <ControlButton variant="secondary" onClick={() => navigate("history")}>
-                      {t("lobby.history")}
+                    <ControlButton variant="secondary" onClick={() => navigate("social")}>
+                      Турнир и рефералы
                     </ControlButton>
                   </div>
                 </article>
@@ -485,31 +557,35 @@ export default function App() {
                 <article className="stats-panel">
                   <div className="stats-grid">
                     <div className="stat-card">
-                      <span>{t("lobby.balance")}</span>
-                      <strong>{formatNumber(stats.balance ?? data.session.balance)}</strong>
+                      <span>Win rate</span>
+                      <strong>{formatPercent(stats.winRate)}</strong>
                     </div>
                     <div className="stat-card">
-                      <span>{t("lobby.rounds")}</span>
+                      <span>Раундов</span>
                       <strong>{formatNumber(stats.gamesPlayed)}</strong>
                     </div>
                     <div className="stat-card">
-                      <span>{t("lobby.wins")}</span>
-                      <strong>{formatNumber(stats.wins)}</strong>
+                      <span>Стрик</span>
+                      <strong>{formatNumber(stats.currentWinStreak)}</strong>
                     </div>
                     <div className="stat-card">
-                      <span>{t("lobby.pushes")}</span>
-                      <strong>{formatNumber(stats.pushes)}</strong>
+                      <span>Blackjack</span>
+                      <strong>{formatNumber(stats.blackjacks)}</strong>
                     </div>
                   </div>
 
                   <div className="mini-summary">
                     <div>
-                      <span className="eyebrow">{t("lobby.lastGame")}</span>
-                      <strong>{formatDate(stats.lastGameAt)}</strong>
+                      <span className="eyebrow">Ваш ранг в турнире</span>
+                      <strong>#{tournament.yourStanding?.rank ?? "—"}</strong>
                     </div>
                     <div>
-                      <span className="eyebrow">{t("lobby.totalWagered")}</span>
-                      <strong>{formatNumber(stats.totalWagered)}</strong>
+                      <span className="eyebrow">Любимая ставка</span>
+                      <strong>{stats.favoriteBets?.[0] ? `${formatNumber(stats.favoriteBets[0].betAmount)} chips` : "Нет"}</strong>
+                    </div>
+                    <div>
+                      <span className="eyebrow">Последняя игра</span>
+                      <strong>{formatDate(stats.lastGameAt)}</strong>
                     </div>
                   </div>
                 </article>
@@ -520,137 +596,333 @@ export default function App() {
               <>
                 <section className="status-ribbon">
                   <div>
-                    <span className="eyebrow">{t("table.bet")}</span>
-                    <strong>{formatChips(round?.bet ?? appState.bet)}</strong>
+                    <span className="eyebrow">Ставка</span>
+                    <strong>{formatNumber(round?.bet ?? appState.bet)} chips</strong>
                   </div>
                   <div>
-                    <span className="eyebrow">{t("actions.split")}</span>
-                    <strong>{activeHand ? `${(round?.activeHandIndex ?? 0) + 1}/${playerHands.length}` : "1/1"}</strong>
-                  </div>
-                  <div>
-                    <span className="eyebrow">{t("table.player")}</span>
+                    <span className="eyebrow">Игрок</span>
                     <strong>{getSeatSubtitle(data.player)}</strong>
                   </div>
                   <div>
-                    <span className="eyebrow">{t("table.rules")}</span>
-                    <strong>{t("table.dealerHitsSoft17")}</strong>
+                    <span className="eyebrow">Кастомизация</span>
+                    <strong>{cardBackLabels[customization.cardBack] ?? customization.cardBack}</strong>
                   </div>
                   <div>
-                    <span className="eyebrow">{t("table.deck")}</span>
-                    <strong>
-                      {formatNumber(round?.shoeRemaining ?? 312)} {t("table.cards")}
-                    </strong>
+                    <span className="eyebrow">Колода</span>
+                    <strong>{round?.shoeRemaining ?? 312} cards</strong>
                   </div>
                 </section>
 
                 <section className="felt-table">
                   <HandPanel
-                    title={t("table.dealer")}
-                    subtitle={t("table.casino")}
+                    title="Дилер"
+                    subtitle="Casino"
                     score={round?.hands?.dealer?.score}
                     cards={round?.hands?.dealer?.cards ?? []}
                     accent="emerald"
-                    compactCards={isSplitRound}
                   />
 
                   <div className="center-banner">
                     <div className="banner-ring" />
                     <div className="banner-copy">
-                      <p className="eyebrow">{t("table.yourTable")}</p>
+                      <p className="eyebrow">Стол</p>
                       <h2>
                         {!round
-                          ? t("table.ready")
+                          ? "Готов к раздаче"
                           : round.status === "finished"
-                            ? t("table.roundClosed")
-                            : t("table.yourTurn")}
+                            ? "Раунд закрыт"
+                            : "Ваш ход"}
                       </h2>
                       {roundMeta && <span className={`result-badge ${roundMeta.tone}`}>{roundMeta.label}</span>}
                     </div>
                   </div>
 
-                  <div className={`player-hands ${isSplitRound ? "split-layout" : ""}`}>
-                    {playerHands.map((hand, index) => (
-                      <HandPanel
-                        key={`player-hand-${index}`}
-                        title={isSplitRound ? `${t("table.player")} ${index + 1}` : t("table.player")}
-                        subtitle={getSeatSubtitle(data.player)}
-                        score={hand.score}
-                        cards={hand.cards ?? []}
-                        accent="gold"
-                        bet={formatChips(hand.bet ?? round?.bet ?? appState.bet)}
-                        status={getHandStatus(hand, round?.status)}
-                        active={hand.isActive}
-                        compactCards={isSplitRound}
-                      />
-                    ))}
-                  </div>
+                  <HandPanel
+                    title="Игрок"
+                    subtitle={getSeatSubtitle(data.player)}
+                    score={round?.hands?.player?.score}
+                    cards={round?.hands?.player?.cards ?? []}
+                    accent="gold"
+                  />
                 </section>
 
                 <footer className="action-dock">
                   <div className="action-copy">
-                    <p className="eyebrow">{t("table.controls")}</p>
-                    <h3>{canStart ? t("table.selectBet") : t("table.quickActions")}</h3>
+                    <p className="eyebrow">Управление</p>
+                    <h3>
+                      {canStart
+                        ? "Выберите ставку и начинайте новую раздачу"
+                        : "Hit, Stand или Double прямо в Mini App"}
+                    </h3>
                   </div>
 
                   <div className="actions">
                     <ControlButton onClick={handleStartRound} disabled={appState.busy || !canStart}>
-                      {canStart ? t("actions.deal") : t("actions.redeal")}
+                      {canStart ? "Deal" : "Redeal"}
                     </ControlButton>
                     <ControlButton
                       onClick={() => handleAction("hit")}
                       disabled={appState.busy || canStart || !round.actions.includes("hit")}
                       variant="secondary"
                     >
-                      {t("actions.hit")}
+                      Hit
                     </ControlButton>
                     <ControlButton
                       onClick={() => handleAction("stand")}
                       disabled={appState.busy || canStart || !round.actions.includes("stand")}
                       variant="secondary"
                     >
-                      {t("actions.stand")}
+                      Stand
                     </ControlButton>
                     <ControlButton
                       onClick={() => handleAction("double")}
                       disabled={appState.busy || canStart || !round.actions.includes("double")}
                       variant="ghost"
                     >
-                      {t("actions.double")}
-                    </ControlButton>
-                    <ControlButton
-                      onClick={() => handleAction("split")}
-                      disabled={appState.busy || canStart || !round.actions.includes("split")}
-                      variant="ghost"
-                    >
-                      {t("actions.split")}
-                    </ControlButton>
-                    <ControlButton disabled variant="ghost">
-                      {t("actions.surrender")}
+                      Double
                     </ControlButton>
                   </div>
                 </footer>
               </>
             )}
 
+            {appState.activeScreen === "social" && (
+              <section className="detail-grid">
+                <article className="section-card">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Weekly Tournament</p>
+                      <h2>{tournament.title}</h2>
+                    </div>
+                    <ControlButton variant="secondary" onClick={() => syncProfile()}>
+                      Обновить
+                    </ControlButton>
+                  </div>
+
+                  <div className="hero-stats">
+                    <div className="stat-card">
+                      <span>Ваш ранг</span>
+                      <strong>#{tournament.yourStanding?.rank ?? "—"}</strong>
+                    </div>
+                    <div className="stat-card">
+                      <span>Очки</span>
+                      <strong>{formatNumber(tournament.yourStanding?.points)}</strong>
+                    </div>
+                    <div className="stat-card">
+                      <span>Приз</span>
+                      <strong>{formatNumber(tournament.yourStanding?.prizeChips)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="leaderboard-list">
+                    {tournament.leaderboard?.slice(0, 10).map((entry) => (
+                      <div key={`${entry.userId}-${entry.rank}`} className="leaderboard-row">
+                        <span>#{entry.rank}</span>
+                        <strong>{entry.avatar} {entry.displayName}</strong>
+                        <span>{formatNumber(entry.points)} pts</span>
+                        <span>{formatNumber(entry.prizeChips)} chips</span>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="section-card">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Referral</p>
+                      <h2>Приведите друга и получите 500 фишек</h2>
+                    </div>
+                  </div>
+
+                  <div className="referral-box">
+                    <div className="pill-row">
+                      <span className="mini-pill">Code: {data.referral?.referralCode}</span>
+                      <span className="mini-pill">Friends: {formatNumber(data.referral?.referredCount)}</span>
+                      <span className="mini-pill">Earned: {formatNumber(data.referral?.earnedChips)}</span>
+                    </div>
+
+                    <div className="inline-actions">
+                      <input
+                        className="text-input"
+                        placeholder="Введите referral code"
+                        value={referralInput}
+                        onChange={(event) => setReferralInput(event.target.value.toUpperCase())}
+                      />
+                      <ControlButton variant="secondary" onClick={handleReferralSubmit} disabled={appState.busy}>
+                        Активировать
+                      </ControlButton>
+                      <ControlButton onClick={handleCopyReferral}>Скопировать ссылку</ControlButton>
+                    </div>
+
+                    <div className="leaderboard-list compact">
+                      {data.referral?.recentReferrals?.length ? (
+                        data.referral.recentReferrals.map((entry) => (
+                          <div key={entry.id} className="leaderboard-row">
+                            <strong>{entry.firstName ?? entry.username ?? entry.telegramId}</strong>
+                            <span>{formatDate(entry.createdAt)}</span>
+                            <span>+{formatNumber(entry.rewardAmount)}</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="empty-card small">
+                          <strong>Пока нет приглашённых</strong>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              </section>
+            )}
+
+            {appState.activeScreen === "profile" && (
+              <section className="detail-grid">
+                <article className="section-card">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Achievements</p>
+                      <h2>Ачивки и бейджи</h2>
+                    </div>
+                  </div>
+
+                  <div className="achievement-grid">
+                    {data.achievements?.length ? (
+                      data.achievements.map((achievement) => (
+                        <div key={achievement.id ?? achievement.achievementKey} className="achievement-card">
+                          <span className="achievement-badge">{achievement.badge}</span>
+                          <strong>{achievement.title}</strong>
+                          <p>{achievement.description}</p>
+                          <span>+{formatNumber(achievement.rewardChips)} chips</span>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="empty-card">
+                        <strong>Ачивки ещё не открыты</strong>
+                        <p>Первый blackjack и победные стрики начнут заполнять этот раздел.</p>
+                      </div>
+                    )}
+                  </div>
+                </article>
+
+                <article className="section-card">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Customization</p>
+                      <h2>Стол, рубашка карт и аватар</h2>
+                    </div>
+                  </div>
+
+                  <div className="customize-group">
+                    <p className="eyebrow">Avatar</p>
+                    <div className="choice-row">
+                      {customization.options?.avatars?.map((avatar) => (
+                        <button
+                          key={avatar}
+                          type="button"
+                          className={avatar === customization.avatar ? "choice-pill active" : "choice-pill"}
+                          onClick={() => handleCustomization("avatar", avatar)}
+                        >
+                          {avatar}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="customize-group">
+                    <p className="eyebrow">Card Back</p>
+                    <div className="choice-row">
+                      {customization.options?.cardBacks?.map((cardBack) => (
+                        <button
+                          key={cardBack}
+                          type="button"
+                          className={cardBack === customization.cardBack ? "choice-pill active" : "choice-pill"}
+                          onClick={() => handleCustomization("cardBack", cardBack)}
+                        >
+                          {cardBackLabels[cardBack] ?? cardBack}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="customize-group">
+                    <p className="eyebrow">Table Theme</p>
+                    <div className="choice-row">
+                      {customization.options?.tableThemes?.map((theme) => (
+                        <button
+                          key={theme}
+                          type="button"
+                          className={theme === customization.tableTheme ? "choice-pill active" : "choice-pill"}
+                          onClick={() => handleCustomization("tableTheme", theme)}
+                        >
+                          {tableThemeLabels[theme] ?? theme}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </article>
+
+                <article className="section-card">
+                  <div className="section-head">
+                    <div>
+                      <p className="eyebrow">Security</p>
+                      <h2>Защита от мульти-аккаунтов</h2>
+                    </div>
+                  </div>
+
+                  <div className="security-card">
+                    <strong>Telegram User ID: {data.security?.userKey}</strong>
+                    <p>Аккаунт привязан к уникальному `telegram_id`, дубликаты на backend не создаются.</p>
+                    <span className="mini-pill">{data.security?.antiMultiAccount ? "Protection Enabled" : "Demo Mode"}</span>
+                  </div>
+                </article>
+              </section>
+            )}
+
             {appState.activeScreen === "history" && (
               <section className="history-list">
                 <article className="section-head">
                   <div>
-                    <p className="eyebrow">{t("history.eyebrow")}</p>
-                    <h2>{t("history.title")}</h2>
+                    <p className="eyebrow">История</p>
+                    <h2>50 последних игр и детальная статистика</h2>
                   </div>
                   <ControlButton variant="secondary" onClick={() => syncProfile()}>
-                    {t("history.refresh")}
+                    Обновить
                   </ControlButton>
                 </article>
 
+                <div className="hero-stats">
+                  <div className="stat-card">
+                    <span>Win rate</span>
+                    <strong>{formatPercent(stats.winRate)}</strong>
+                  </div>
+                  <div className="stat-card">
+                    <span>Побед</span>
+                    <strong>{formatNumber(stats.wins)}</strong>
+                  </div>
+                  <div className="stat-card">
+                    <span>Поражений</span>
+                    <strong>{formatNumber(stats.losses)}</strong>
+                  </div>
+                  <div className="stat-card">
+                    <span>Best streak</span>
+                    <strong>{formatNumber(stats.bestWinStreak)}</strong>
+                  </div>
+                </div>
+
+                <div className="favorite-bets">
+                  {(stats.favoriteBets ?? []).map((entry) => (
+                    <span key={entry.betAmount} className="mini-pill">
+                      {formatNumber(entry.betAmount)} chips x {formatNumber(entry.rounds)}
+                    </span>
+                  ))}
+                </div>
+
                 {data.history.length === 0 ? (
                   <div className="empty-card">
-                    <strong>{t("history.emptyTitle")}</strong>
-                    <p>{t("history.emptyDescription")}</p>
+                    <strong>Пока пусто</strong>
+                    <p>Сыграйте первую раздачу, чтобы здесь появилась история.</p>
                   </div>
                 ) : (
-                  data.history.map((item) => (
+                  data.history.slice(0, 50).map((item) => (
                     <motion.article
                       key={item.id}
                       className="history-card"
@@ -659,15 +931,11 @@ export default function App() {
                     >
                       <div>
                         <span className="eyebrow">{formatDate(item.finishedAt)}</span>
-                        <h3>{mapOutcomeLabel(item.outcome, t)}</h3>
+                        <h3>{item.outcome}</h3>
                       </div>
                       <div className="history-metrics">
-                        <span>
-                          {t("history.bet")} {formatNumber(item.betAmount)}
-                        </span>
-                        <span>
-                          {t("history.payout")} {formatNumber(item.payoutAmount)}
-                        </span>
+                        <span>Bet {formatNumber(item.betAmount)}</span>
+                        <span>Payout {formatNumber(item.payoutAmount)}</span>
                         <strong className={item.netResult >= 0 ? "positive" : "negative"}>
                           {item.netResult >= 0 ? "+" : ""}
                           {formatNumber(item.netResult)}
@@ -683,85 +951,36 @@ export default function App() {
               <section className="shop-grid">
                 <article className="section-head shop-head">
                   <div>
-                    <p className="eyebrow">{t("shop.eyebrow")}</p>
-                    <h2>{t("shop.title")}</h2>
+                    <p className="eyebrow">Магазин</p>
+                    <h2>Пакеты фишек для Telegram Stars</h2>
                   </div>
-                  <p className="shop-note">{t("shop.note")}</p>
+                  <p className="shop-note">VIP и баланс продолжают работать, а новый прогресс-системный слой уже использует эти фишки как награды.</p>
                 </article>
 
                 <div className="pack-grid">
-                  {chipPacks.map((pack) => {
-                    const packTitle = t(`shop.packs.${pack.id}`);
-
-                    return (
-                      <motion.article
-                        key={pack.id}
-                        className={`pack-card ${pack.accent}`}
-                        whileHover={{ y: -6, rotate: -0.5 }}
-                      >
-                        <span className="eyebrow">Telegram {t("shop.stars")}</span>
-                        <h3>{packTitle}</h3>
-                        <strong>{formatChips(pack.amount)}</strong>
-                        <p>
-                          {formatNumber(pack.stars)} {t("shop.stars")}
-                        </p>
-                        <ControlButton
-                          onClick={() =>
-                            setAppState((current) => ({
-                              ...current,
-                              toast: t("toasts.packPrepared", { title: packTitle })
-                            }))
-                          }
-                        >
-                          {t("shop.select")}
-                        </ControlButton>
-                      </motion.article>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {appState.activeScreen === "settings" && (
-              <section className="settings-grid">
-                <article className="section-head settings-head">
-                  <div>
-                    <p className="eyebrow">{t("settings.eyebrow")}</p>
-                    <h2>{t("settings.title")}</h2>
-                  </div>
-                  <p className="shop-note">{t("settings.description")}</p>
-                </article>
-
-                <article className="settings-card">
-                  <div className="settings-copy">
-                    <span className="eyebrow">{t("settings.current")}</span>
-                    <strong>{SUPPORTED_LANGUAGES.find((entry) => entry.code === language)?.nativeLabel}</strong>
-                    <p>{manualLanguage ? t("settings.manual") : t("settings.autoDetected")}</p>
-                  </div>
-
-                  <div className="language-grid">
-                    <button
-                      type="button"
-                      className={!manualLanguage ? "language-button active" : "language-button"}
-                      onClick={handleAutoLanguage}
+                  {chipPacks.map((pack) => (
+                    <motion.article
+                      key={pack.id}
+                      className={`pack-card ${pack.accent}`}
+                      whileHover={{ y: -6, rotate: -0.5 }}
                     >
-                      <span>{t("settings.autoDetected")}</span>
-                      <strong>{SUPPORTED_LANGUAGES.find((entry) => entry.code === detectedLanguage)?.nativeLabel}</strong>
-                    </button>
-
-                    {SUPPORTED_LANGUAGES.map((entry) => (
-                      <button
-                        key={entry.code}
-                        type="button"
-                        className={entry.code === language && manualLanguage ? "language-button active" : "language-button"}
-                        onClick={() => handleLanguageSelect(entry.code)}
+                      <span className="eyebrow">Telegram Stars</span>
+                      <h3>{pack.title}</h3>
+                      <strong>{formatNumber(pack.amount)} chips</strong>
+                      <p>{pack.stars} Stars</p>
+                      <ControlButton
+                        onClick={() =>
+                          setAppState((current) => ({
+                            ...current,
+                            toast: `Пакет ${pack.title} подготовлен для интеграции со Stars`
+                          }))
+                        }
                       >
-                        <span>{entry.label}</span>
-                        <strong>{entry.nativeLabel}</strong>
-                      </button>
-                    ))}
-                  </div>
-                </article>
+                        Выбрать
+                      </ControlButton>
+                    </motion.article>
+                  ))}
+                </div>
               </section>
             )}
           </motion.section>
