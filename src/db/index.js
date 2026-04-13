@@ -69,7 +69,7 @@ class BlackjackDatabase {
     addColumnIfMissing("free_rounds", "free_rounds INTEGER NOT NULL DEFAULT 3");
     addColumnIfMissing(
       "free_rounds_refreshed_at",
-      "free_rounds_refreshed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+      "free_rounds_refreshed_at TEXT DEFAULT NULL"
     );
   }
 
