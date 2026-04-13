@@ -128,6 +128,70 @@ test("double is only allowed on the initial two-card hand", () => {
   assert.throws(() => engine.double(round), /Double is only allowed/);
 });
 
+test("split creates two active hands with mirrored stake", () => {
+  const engine = new GameEngine();
+  engine.shoe = [
+    { rank: "9", value: 9, suit: "clubs" },
+    { rank: "8", value: 8, suit: "spades" }
+  ];
+
+  const round = {
+    status: "player_turn",
+    bet: 50,
+    mainBet: 50,
+    totalWager: 50,
+    sideBetTotal: 0,
+    payout: 0,
+    mainPayout: 0,
+    sideBetPayout: 0,
+    actions: ["hit", "stand", "double", "split"],
+    activeHandIndex: 0,
+    sideBets: {},
+    anticheat: {
+      trueCountAtStart: 0
+    },
+    shoeState: {},
+    hands: {
+      player: {
+        cards: [
+          { rank: "8", value: 8, suit: "hearts" },
+          { rank: "8", value: 8, suit: "diamonds" }
+        ]
+      },
+      dealer: {
+        cards: [
+          { rank: "10", value: 10, suit: "clubs" },
+          { rank: "6", value: 6, suit: "spades" }
+        ]
+      }
+    },
+    playerHands: [
+      {
+        cards: [
+          { rank: "8", value: 8, suit: "hearts" },
+          { rank: "8", value: 8, suit: "diamonds" }
+        ],
+        bet: 50,
+        doubled: false,
+        isStanding: false,
+        isSplitHand: false,
+        outcome: null,
+        payout: 0
+      }
+    ]
+  };
+
+  engine.split(round);
+
+  assert.equal(round.playerHands.length, 2);
+  assert.equal(round.playerHands[0].bet, 50);
+  assert.equal(round.playerHands[1].bet, 50);
+  assert.equal(round.bet, 100);
+  assert.equal(round.totalWager, 100);
+  assert.equal(round.playerHands[0].cards.length, 2);
+  assert.equal(round.playerHands[1].cards.length, 2);
+});
+
 test("cut card marks the shoe for shuffle and reshuffles on the next round", () => {
   const engine = new GameEngine({
     deckCount: 1,

@@ -36,11 +36,14 @@ class SessionManager {
         })
       : null;
 
+    const tableMode = metadata?.tableMode === "free" ? "free" : "cash";
     const session = {
       id: randomUUID(),
       playerId,
       userId: user ? user.userId || user.id : null,
       metadata,
+      tableMode,
+      freeBalance: tableMode === "free" ? 1000 : null,
       currentRound: null,
       history: [],
       balance: user ? user.balance : null,
@@ -80,7 +83,11 @@ class SessionManager {
     }
 
     let stakeSource = "balance";
-    if (this.monetizationService && session.userId) {
+    if (session.tableMode === "free") {
+      this.ensureAvailableBalance(session, amount);
+      session.freeBalance -= amount;
+      stakeSource = "free_table";
+    } else if (this.monetizationService && session.userId) {
       const reservedStake = this.monetizationService.reserveRoundEntry({
         userId: session.userId,
         betAmount: amount,
@@ -121,7 +128,21 @@ class SessionManager {
     }
 
     if (action === "double" || action === "split") {
-      this.ensureAvailableBalance(session, this.getAdditionalStakeForAction(session.currentRound, action));
+      const additionalStake = this.getAdditionalStakeForAction(session.currentRound, action);
+      if (this.getAvailableBalanceForRound(session, session.currentRound) < additionalStake) {
+        if (action === "double") {
+          this.engine.applyAction(session.currentRound, "stand");
+          this.syncFinishedRound(session);
+          session.updatedAt = new Date().toISOString();
+          return this.presentSession(session);
+        }
+
+        throw new Error("Insufficient balance");
+      }
+
+      if (session.tableMode === "free") {
+        session.freeBalance -= additionalStake;
+      }
     }
 
     this.engine.applyAction(session.currentRound, action);
@@ -153,6 +174,13 @@ class SessionManager {
   }
 
   ensureAvailableBalance(session, requiredAmount) {
+    if (session.tableMode === "free") {
+      if ((session.freeBalance ?? 0) < requiredAmount) {
+        throw new Error("Insufficient balance");
+      }
+      return;
+    }
+
     if (!this.userStore || !session.userId) {
       return;
     }
@@ -166,12 +194,23 @@ class SessionManager {
   }
 
   syncFinishedRound(session) {
-    if (!this.userStore || !session.userId || !session.currentRound) {
+    if (!session.currentRound) {
       return;
     }
 
     const round = session.currentRound;
     if (round.status !== "finished" || round.recordId) {
+      return;
+    }
+
+    if (session.tableMode === "free") {
+      session.freeBalance += round.payout;
+      round.recordId = `free:${round.id}`;
+      round.settledAt = new Date().toISOString();
+      return;
+    }
+
+    if (!this.userStore || !session.userId) {
       return;
     }
 
@@ -237,6 +276,8 @@ class SessionManager {
       playerId: session.playerId,
       userId: session.userId,
       metadata: session.metadata,
+      tableMode: session.tableMode,
+      freeBalance: session.freeBalance,
       balance: session.balance,
       freeRounds: session.freeRounds,
       vipStatus: session.vipStatus,
@@ -262,6 +303,39 @@ class SessionManager {
     }
 
     return removed;
+  }
+
+  getAvailableBalanceForRound(session, round) {
+    if (session.tableMode === "free") {
+      return session.freeBalance ?? 0;
+    }
+
+    const balance = this.userStore && session.userId ? this.userStore.getBalance(session.userId) : session.balance ?? 0;
+    session.balance = balance;
+
+    if (!round || round.stakeSource !== "balance") {
+      return balance;
+    }
+
+    return Math.max(0, balance - (round.totalWager || 0));
+  }
+
+  setTableMode(sessionId, tableMode) {
+    const session = this.getSession(sessionId);
+    const nextMode = tableMode === "free" ? "free" : "cash";
+
+    if (session.currentRound && session.currentRound.status !== "finished") {
+      throw new Error("Current round must finish before switching table mode");
+    }
+
+    session.tableMode = nextMode;
+    session.metadata = {
+      ...(session.metadata || {}),
+      tableMode: nextMode
+    };
+    session.freeBalance = nextMode === "free" ? 1000 : null;
+    session.updatedAt = new Date().toISOString();
+    return this.presentSession(session);
   }
 }
 

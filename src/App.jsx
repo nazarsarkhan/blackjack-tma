@@ -10,9 +10,10 @@ import {
   connectSessionSocket,
   refreshProfile,
   saveCustomization,
+  setTableMode,
   startRound
 } from "./lib/gameClient";
-import { getTelegramContext, haptic, initTelegramApp, setupMainButton } from "./lib/telegram";
+import { bindViewportCssVars, getTelegramContext, haptic, initTelegramApp, setupMainButton } from "./lib/telegram";
 
 const screens = [
   { id: "lobby", label: "Лобби" },
@@ -81,6 +82,10 @@ function formatPercent(value) {
   return `${Math.round((value ?? 0) * 100)}%`;
 }
 
+function getDisplayedBalance(session, fallback) {
+  return session?.tableMode === "free" ? session?.freeBalance ?? 0 : session?.balance ?? fallback;
+}
+
 function getSeatSubtitle(user) {
   return user?.username ? `@${user.username}` : user?.firstName ?? "Seat 1";
 }
@@ -113,6 +118,7 @@ export default function App() {
 
   useEffect(() => {
     initTelegramApp();
+    const unbindViewport = bindViewportCssVars();
 
     let mounted = true;
     bootstrapGame(telegram.user, telegram.startParam).then((data) => {
@@ -131,6 +137,7 @@ export default function App() {
 
     return () => {
       mounted = false;
+      unbindViewport();
     };
   }, [telegram.startParam, telegram.user]);
 
@@ -332,11 +339,46 @@ export default function App() {
               ? "push"
               : "lose";
 
+        haptic("notificationOccurred", outcomeTone === "win" ? "success" : outcomeTone === "push" ? "warning" : "error");
         await playSound(outcomeTone, appState.soundsEnabled);
         await syncProfile();
       } else {
         await playSound("deal", appState.soundsEnabled);
       }
+    } catch (error) {
+      setAppState((current) => ({
+        ...current,
+        busy: false,
+        toast: error.message
+      }));
+    }
+  }
+
+  async function handleTableMode(nextMode) {
+    if (!appState.data?.session) {
+      return;
+    }
+
+    setAppState((current) => ({ ...current, busy: true, toast: "" }));
+
+    try {
+      const session = await setTableMode({
+        session: appState.data.session,
+        tableMode: nextMode,
+        isDemo: appState.data.isDemo
+      });
+
+      setAppState((current) => ({
+        ...current,
+        busy: false,
+        data: current.data
+          ? {
+              ...current.data,
+              session: mergeSessionCustomization(session, current.data.customization)
+            }
+          : current.data,
+        toast: nextMode === "free" ? "Бесплатный стол включён" : "Игра на реальные фишки включена"
+      }));
     } catch (error) {
       setAppState((current) => ({
         ...current,
@@ -451,10 +493,12 @@ export default function App() {
   const customization = data.customization ?? {};
   const tournament = data.tournament ?? { leaderboard: [], prizes: [] };
   const profileStyle = themeStyles[customization.tableTheme] ?? themeStyles.emerald;
+  const displayedBalance = getDisplayedBalance(data.session, data.player.balance);
+  const isFreeTable = data.session.tableMode === "free";
 
   return (
     <main
-      className={`app-shell card-back-${customization.cardBack ?? "classic"}`}
+      className={`app-shell screen-${appState.activeScreen} card-back-${customization.cardBack ?? "classic"}`}
       style={profileStyle}
       data-theme={customization.tableTheme ?? "emerald"}
     >
@@ -476,7 +520,7 @@ export default function App() {
               <span className="avatar-coin">{customization.avatar ?? "🂡"}</span>
               <div>
                 <span>{telegram.user?.first_name ?? data.player.firstName ?? "Гость"}</span>
-                <strong>{formatNumber(data.session.balance ?? data.player.balance)} chips</strong>
+                <strong>{formatNumber(displayedBalance)} {isFreeTable ? "free chips" : "chips"}</strong>
               </div>
             </div>
             <button
@@ -595,8 +639,30 @@ export default function App() {
             {appState.activeScreen === "table" && (
               <>
                 <section className="status-ribbon">
+                  <div className="table-mode-toggle" role="tablist" aria-label="Режим стола">
+                    <button
+                      type="button"
+                      className={isFreeTable ? "mini-pill" : "mini-pill active"}
+                      onClick={() => handleTableMode("cash")}
+                      disabled={appState.busy || !canStart}
+                    >
+                      Реальный стол
+                    </button>
+                    <button
+                      type="button"
+                      className={isFreeTable ? "mini-pill active" : "mini-pill"}
+                      onClick={() => handleTableMode("free")}
+                      disabled={appState.busy || !canStart}
+                    >
+                      Бесплатный стол
+                    </button>
+                  </div>
                   <div>
-                    <span className="eyebrow">Ставка</span>
+                    <span className="eyebrow">{isFreeTable ? "Free balance" : "Ставка"}</span>
+                    <strong>{formatNumber(displayedBalance)} {isFreeTable ? "chips" : "chips"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Текущая ставка</span>
                     <strong>{formatNumber(round?.bet ?? appState.bet)} chips</strong>
                   </div>
                   <div>
@@ -637,13 +703,32 @@ export default function App() {
                     </div>
                   </div>
 
-                  <HandPanel
-                    title="Игрок"
-                    subtitle={getSeatSubtitle(data.player)}
-                    score={round?.hands?.player?.score}
-                    cards={round?.hands?.player?.cards ?? []}
-                    accent="gold"
-                  />
+                  <div className={`player-hands ${(round?.playerHands?.length ?? 0) > 1 ? "split-layout" : ""}`}>
+                    {(round?.playerHands?.length
+                      ? round.playerHands
+                      : [
+                          {
+                            cards: round?.hands?.player?.cards ?? [],
+                            score: round?.hands?.player?.score,
+                            bet: round?.bet ?? appState.bet,
+                            isActive: true
+                          }
+                        ]
+                    ).map((hand, index) => (
+                      <HandPanel
+                        key={`player-hand-${index}`}
+                        title={round?.playerHands?.length > 1 ? `Рука ${index + 1}` : "Игрок"}
+                        subtitle={getSeatSubtitle(data.player)}
+                        score={hand.score}
+                        cards={hand.cards}
+                        bet={hand.bet}
+                        status={hand.outcome ? resultMeta[hand.outcome]?.label ?? hand.outcome : hand.isActive ? "Активная" : null}
+                        accent="gold"
+                        active={Boolean(hand.isActive)}
+                        compactCards={(round?.playerHands?.length ?? 0) > 1}
+                      />
+                    ))}
+                  </div>
                 </section>
 
                 <footer className="action-dock">
@@ -680,6 +765,13 @@ export default function App() {
                       variant="ghost"
                     >
                       Double
+                    </ControlButton>
+                    <ControlButton
+                      onClick={() => handleAction("split")}
+                      disabled={appState.busy || canStart || !round.actions.includes("split")}
+                      variant="ghost"
+                    >
+                      Split
                     </ControlButton>
                   </div>
                 </footer>

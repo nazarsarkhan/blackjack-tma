@@ -27,9 +27,20 @@ const parseErrorStatus = (message) => {
 };
 
 const parsePagination = (req) => ({
-  limit: Number(req.query.limit) > 0 ? Number(req.query.limit) : undefined,
+  limit: Number(req.query.limit) > 0 ? Math.min(Number(req.query.limit), 100) : undefined,
   offset: Number(req.query.offset) >= 0 ? Number(req.query.offset) : undefined
 });
+
+const clampBet = (value) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    throw new Error("Bet is required");
+  }
+
+  return Math.floor(amount);
+};
+
+const normalizeTableMode = (value) => (value === "free" ? "free" : "cash");
 
 const getUserOr404 = (userStore, telegramId, res) => {
   if (!userStore) {
@@ -307,7 +318,10 @@ const createApp = ({ sessionManager, userStore, monetizationService = null }) =>
     try {
       const session = sessionManager.createSession({
         playerId: req.body.playerId,
-        metadata: req.body.metadata || null
+        metadata: {
+          ...(req.body.metadata || {}),
+          tableMode: normalizeTableMode(req.body.tableMode ?? req.body.metadata?.tableMode)
+        }
       });
       res.status(201).json(session);
     } catch (error) {
@@ -326,8 +340,16 @@ const createApp = ({ sessionManager, userStore, monetizationService = null }) =>
 
   app.post("/api/sessions/:sessionId/rounds", (req, res) => {
     try {
-      const session = sessionManager.startRound(req.params.sessionId, req.body.bet);
+      const session = sessionManager.startRound(req.params.sessionId, clampBet(req.body.bet));
       res.status(201).json(session);
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/sessions/:sessionId/mode", (req, res) => {
+    try {
+      res.json(sessionManager.setTableMode(req.params.sessionId, normalizeTableMode(req.body.tableMode)));
     } catch (error) {
       res.status(parseErrorStatus(error.message)).json({ error: error.message });
     }
@@ -335,6 +357,9 @@ const createApp = ({ sessionManager, userStore, monetizationService = null }) =>
 
   app.post("/api/sessions/:sessionId/actions/:action", (req, res) => {
     try {
+      if (!["hit", "stand", "double", "split", "insurance"].includes(req.params.action)) {
+        throw new Error("Unsupported action");
+      }
       const session = sessionManager.applyAction(req.params.sessionId, req.params.action);
       res.json(session);
     } catch (error) {

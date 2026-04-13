@@ -29,6 +29,8 @@ const defaultDemoState = {
   }
 };
 
+const DEMO_FREE_TABLE_BALANCE = 1000;
+
 function getPlayerId(user) {
   const userId = user?.id ?? user?.telegramId;
   if (userId) {
@@ -165,6 +167,7 @@ function createDemoPlayerHand(cards, bet, options = {}) {
     bet,
     doubled: false,
     isStanding: false,
+    isSplitAceHand: Boolean(options.isSplitAceHand),
     isSplitHand: Boolean(options.isSplitHand),
     outcome: null,
     payout: 0
@@ -202,11 +205,16 @@ function updateDemoActions(round) {
   const hand = getDemoActiveHand(round);
   const actions = ["hit", "stand"];
 
-  if (hand?.cards.length === 2 && !hand.doubled) {
+  if (hand?.cards.length === 2 && !hand.doubled && !hand.isSplitAceHand) {
     actions.push("double");
   }
 
-  if (round.activeHandIndex === 0 && getDemoPlayerHands(round).length === 1 && canSplitDemoHand(hand)) {
+  if (
+    round.activeHandIndex === 0 &&
+    getDemoPlayerHands(round).length === 1 &&
+    canSplitDemoHand(hand) &&
+    !hand?.isSplitHand
+  ) {
     actions.push("split");
   }
 
@@ -389,6 +397,8 @@ function createDemoSession(user) {
     id: `demo-session-${getPlayerId(user)}`,
     playerId: getPlayerId(user),
     userId: getPlayerId(user),
+    tableMode: "cash",
+    freeBalance: DEMO_FREE_TABLE_BALANCE,
     balance: state.balance,
     currentRound: null,
     history: [],
@@ -424,7 +434,8 @@ function bootstrapDemo(user) {
 
 function finishDemoRound(session, round) {
   const state = getDemoState();
-  const netResult = round.payout - round.bet;
+  const usesCashBalance = session.tableMode !== "free";
+  const netResult = usesCashBalance ? round.payout - round.bet : round.payout;
   const outcome =
     round.outcome === "player_blackjack"
       ? "blackjack"
@@ -457,16 +468,18 @@ function finishDemoRound(session, round) {
     finishedAt: round.finishedAt
   };
 
-  const nextState = {
-    balance: state.balance + netResult,
-    history: [historyItem, ...state.history].slice(0, 12)
-  };
-
-  saveDemoState(nextState);
+  if (usesCashBalance) {
+    saveDemoState({
+      ...state,
+      balance: state.balance + netResult,
+      history: [historyItem, ...state.history].slice(0, 12)
+    });
+  }
 
   return {
     ...session,
-    balance: nextState.balance,
+    balance: usesCashBalance ? state.balance + netResult : session.balance,
+    freeBalance: usesCashBalance ? session.freeBalance : (session.freeBalance ?? 0) + round.payout,
     currentRound: createPresentedRound(round, true),
     history: [createPresentedRound(round, true), ...session.history].slice(0, 10)
   };
@@ -713,6 +726,22 @@ export async function claimReferral(playerId, referralCode, isDemo = false) {
 
 export async function startRound({ session, bet, isDemo }) {
   if (isDemo) {
+    if (session.tableMode === "free") {
+      if ((session.freeBalance ?? 0) < bet) {
+        throw new Error("Insufficient balance");
+      }
+      const round = createDemoRound(session.id, session.playerId, bet);
+      if (round.status === "finished") {
+        return finishDemoRound({ ...session, freeBalance: session.freeBalance - bet }, round);
+      }
+
+      return {
+        ...session,
+        freeBalance: session.freeBalance - bet,
+        currentRound: createPresentedRound(round)
+      };
+    }
+
     const round = createDemoRound(session.id, session.playerId, bet);
     if (round.status === "finished") {
       return finishDemoRound(session, round);
@@ -753,6 +782,10 @@ export async function applyRoundAction({ session, action, isDemo }) {
 
     if (action === "hit") {
       const hand = getDemoActiveHand(round);
+      if (hand.isSplitAceHand) {
+        hand.isStanding = true;
+        return finishDemoRound(session, advanceDemoHand(round));
+      }
       hand.cards.push(drawCard());
       if (scoreHand(hand.cards).isBust) {
         hand.outcome = "dealer_win";
@@ -766,6 +799,14 @@ export async function applyRoundAction({ session, action, isDemo }) {
 
     if (action === "double") {
       const hand = getDemoActiveHand(round);
+      const availableBalance = session.tableMode === "free" ? session.freeBalance : session.balance - round.bet;
+      if (availableBalance < hand.bet) {
+        hand.isStanding = true;
+        return finishDemoRound(session, advanceDemoHand(round));
+      }
+      const nextSession = session.tableMode === "free"
+        ? { ...session, freeBalance: session.freeBalance - hand.bet }
+        : session;
       hand.bet *= 2;
       hand.doubled = true;
       round.bet += hand.bet / 2;
@@ -775,11 +816,11 @@ export async function applyRoundAction({ session, action, isDemo }) {
         hand.outcome = "dealer_win";
         hand.payout = 0;
         hand.isStanding = true;
-        return finishDemoRound(session, advanceDemoHand(round));
+        return finishDemoRound(nextSession, advanceDemoHand(round));
       }
 
       hand.isStanding = true;
-      return finishDemoRound(session, advanceDemoHand(round));
+      return finishDemoRound(nextSession, advanceDemoHand(round));
     }
 
     if (action === "split") {
@@ -790,14 +831,36 @@ export async function applyRoundAction({ session, action, isDemo }) {
 
       const [firstCard, secondCard] = hand.cards;
       const splitBet = hand.bet;
-      const firstHand = createDemoPlayerHand([firstCard, drawCard()], splitBet, { isSplitHand: true });
-      const secondHand = createDemoPlayerHand([secondCard, drawCard()], splitBet, { isSplitHand: true });
+      const availableBalance = session.tableMode === "free" ? session.freeBalance : session.balance - round.bet;
+      if (availableBalance < splitBet) {
+        throw new Error("Insufficient balance");
+      }
+      const nextSession = session.tableMode === "free"
+        ? { ...session, freeBalance: session.freeBalance - splitBet }
+        : session;
+      const splittingAces = firstCard.rank === "A" && secondCard.rank === "A";
+      const firstHand = createDemoPlayerHand([firstCard, drawCard()], splitBet, {
+        isSplitHand: true,
+        isSplitAceHand: splittingAces
+      });
+      const secondHand = createDemoPlayerHand([secondCard, drawCard()], splitBet, {
+        isSplitHand: true,
+        isSplitAceHand: splittingAces
+      });
 
       round.playerHands = [firstHand, secondHand];
       round.hands.player.cards = firstHand.cards;
       round.bet += splitBet;
       round.activeHandIndex = 0;
+      if (splittingAces) {
+        firstHand.isStanding = true;
+        return finishDemoRound(nextSession, advanceDemoHand(round));
+      }
       updateDemoActions(round);
+      return {
+        ...nextSession,
+        currentRound: createPresentedRound(round)
+      };
     }
 
     if (action === "stand") {
@@ -847,4 +910,23 @@ export function connectSessionSocket({ sessionId, onSession, onError }) {
   return () => {
     socket.close();
   };
+}
+
+export async function setTableMode({ session, tableMode, isDemo }) {
+  if (isDemo) {
+    if (session.currentRound && session.currentRound.status !== "finished") {
+      throw new Error("Current round must finish before switching table mode");
+    }
+
+    return {
+      ...session,
+      tableMode,
+      freeBalance: tableMode === "free" ? DEMO_FREE_TABLE_BALANCE : null
+    };
+  }
+
+  return request(`/api/sessions/${session.id}/mode`, {
+    method: "POST",
+    body: JSON.stringify({ tableMode })
+  });
 }

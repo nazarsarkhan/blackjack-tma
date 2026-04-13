@@ -19,7 +19,7 @@ export default function Card({ card, index = 0, compact = false }) {
       className={`card ${compact ? "card-compact" : ""} ${card.hidden ? "card-hidden" : ""}`}
       initial={{ opacity: 0, y: -26, rotate: -9, scale: 0.88 }}
       animate={{ opacity: 1, y: 0, rotate: 0, scale: 1 }}
-      transition={{ duration: 0.32, delay: index * 0.08, ease: "easeOut" }}
+      transition={{ type: "spring", stiffness: 280, damping: 24, delay: index * 0.05 }}
     >
       {card.hidden ? (
         <div className="card-back-pattern" aria-label={t("table.cards")} />

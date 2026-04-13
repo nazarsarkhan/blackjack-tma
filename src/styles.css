@@ -16,8 +16,10 @@
   --shadow: 0 28px 100px rgba(0, 0, 0, 0.45);
   --tg-viewport-height: 100vh;
   --tg-stable-height: 100vh;
-  --card-width: 102px;
-  --card-height: 148px;
+  --card-width: min(18vw, 5.8rem);
+  --card-height: min(26vw, 8.2rem);
+  --touch-target: max(44px, 5.8vh);
+  --gutter: clamp(0.55rem, 1.8vw, 1rem);
 }
 
 * {
@@ -46,9 +48,9 @@ input {
   position: relative;
   min-height: var(--tg-stable-height);
   padding:
-    max(18px, env(safe-area-inset-top))
-    14px
-    max(18px, calc(env(safe-area-inset-bottom) + 14px));
+    max(1.8vh, env(safe-area-inset-top))
+    3vw
+    max(1.8vh, calc(env(safe-area-inset-bottom) + 1.4vh));
   overflow: hidden;
 }
 
@@ -100,7 +102,7 @@ input {
   z-index: 1;
   max-width: 1180px;
   margin: 0 auto;
-  padding: 18px;
+  padding: clamp(0.85rem, 2.2vw, 1.1rem);
   border-radius: 34px;
   border: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(13, 40, 28, 0.94), rgba(6, 23, 17, 0.96));
@@ -213,8 +215,8 @@ input {
 .tab-pill,
 .bet-chip,
 .mini-pill {
-  min-height: 44px;
-  padding: 0 14px;
+  min-height: var(--touch-target);
+  padding: 0 max(0.7rem, 2.4vw);
   background: rgba(255, 255, 255, 0.04);
 }
 
@@ -242,6 +244,12 @@ input {
 
 .tab-pill.active,
 .bet-chip.active {
+  border-color: rgba(125, 228, 176, 0.4);
+  background: linear-gradient(180deg, rgba(19, 81, 56, 0.88), rgba(12, 52, 37, 0.88));
+  color: #f6f2e3;
+}
+
+.mini-pill.active {
   border-color: rgba(125, 228, 176, 0.4);
   background: linear-gradient(180deg, rgba(19, 81, 56, 0.88), rgba(12, 52, 37, 0.88));
   color: #f6f2e3;
@@ -369,9 +377,9 @@ input {
 .felt-table {
   position: relative;
   display: grid;
-  gap: 18px;
-  margin-top: 18px;
-  padding: 22px;
+  gap: clamp(0.5rem, 1.5vh, 0.9rem);
+  margin-top: clamp(0.6rem, 1.5vh, 1rem);
+  padding: clamp(0.65rem, 1.9vw, 1rem);
   border-radius: 32px;
   overflow: hidden;
   background:
@@ -401,7 +409,7 @@ input {
 
 .hand-panel {
   position: relative;
-  padding: 18px;
+  padding: clamp(0.6rem, 1.8vw, 0.95rem);
   border-radius: 26px;
   border: 1px solid var(--line);
   background: rgba(5, 27, 19, 0.34);
@@ -424,7 +432,7 @@ input {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 0.55rem;
 }
 
 .hand-bet,
@@ -440,26 +448,26 @@ input {
 }
 
 .score-chip {
-  min-width: 58px;
-  min-height: 46px;
-  padding: 0 16px;
-  font-size: 1.2rem;
+  min-width: 14vw;
+  min-height: var(--touch-target);
+  padding: 0 4vw;
+  font-size: clamp(0.9rem, 2.8vw, 1.15rem);
 }
 
 .cards-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: clamp(0.25rem, 1vw, 0.5rem);
   align-items: flex-start;
-  min-height: 152px;
-  margin-top: 18px;
+  min-height: calc(var(--card-height) + 0.5rem);
+  margin-top: clamp(0.45rem, 1.2vh, 0.8rem);
 }
 
 .center-banner {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 130px;
+  min-height: 10vh;
 }
 
 .banner-ring {
@@ -479,8 +487,8 @@ input {
   position: relative;
   width: var(--card-width);
   height: var(--card-height);
-  padding: 10px;
-  border-radius: 18px;
+  padding: min(1.8vw, 0.55rem);
+  border-radius: 1rem;
   overflow: hidden;
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.99), rgba(244, 239, 225, 0.98));
   color: #12271f;
@@ -488,8 +496,8 @@ input {
 }
 
 .card-compact {
-  --card-width: 88px;
-  --card-height: 128px;
+  --card-width: min(15vw, 4.6rem);
+  --card-height: min(22vw, 6.8rem);
 }
 
 .card-hidden {
@@ -521,8 +529,8 @@ input {
 
 .card-corner.mirrored {
   position: absolute;
-  right: 10px;
-  bottom: 10px;
+  right: min(1.8vw, 0.55rem);
+  bottom: min(1.8vw, 0.55rem);
   transform: rotate(180deg);
 }
 
@@ -531,7 +539,7 @@ input {
   inset: 0;
   display: grid;
   place-items: center;
-  font-size: 2.6rem;
+  font-size: clamp(1.2rem, 5vw, 2rem);
 }
 
 .red,
@@ -546,7 +554,7 @@ input {
 }
 
 .action-dock {
-  margin-top: 18px;
+  margin-top: clamp(0.6rem, 1.6vh, 1rem);
 }
 
 .actions {
@@ -554,9 +562,9 @@ input {
 }
 
 .control-button {
-  min-width: 116px;
-  min-height: 54px;
-  padding: 0 20px;
+  min-width: 21vw;
+  min-height: var(--touch-target);
+  padding: 0 max(0.7rem, 2.8vw);
   border-radius: 999px;
   border: 1px solid transparent;
   cursor: pointer;
@@ -648,6 +656,65 @@ input {
   box-shadow: 0 16px 50px rgba(0, 0, 0, 0.34);
 }
 
+.table-mode-toggle {
+  display: flex;
+  gap: var(--gutter);
+  flex-wrap: wrap;
+}
+
+.screen-table .table-frame {
+  max-height: calc(var(--tg-stable-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 3vh);
+  overflow: hidden;
+}
+
+.screen-table .screen-panel {
+  min-height: 0;
+  margin-top: clamp(0.55rem, 1.3vh, 0.9rem);
+}
+
+.screen-table .status-ribbon {
+  gap: clamp(0.35rem, 1vh, 0.65rem);
+  padding: clamp(0.55rem, 1.6vw, 0.9rem);
+}
+
+.screen-table .felt-table {
+  grid-template-rows: minmax(0, 1fr) auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+.screen-table .hand-header h2 {
+  font-size: clamp(1rem, 3.6vw, 1.25rem);
+}
+
+.screen-table .eyebrow {
+  font-size: clamp(0.58rem, 1.8vw, 0.72rem);
+}
+
+.screen-table .action-copy h3 {
+  font-size: clamp(0.95rem, 3.3vw, 1.1rem);
+}
+
+.screen-table .actions {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--gutter);
+  width: 100%;
+}
+
+.screen-table .control-button {
+  min-width: 0;
+  font-size: clamp(0.78rem, 2.8vw, 0.95rem);
+}
+
+.screen-table .center-banner h2 {
+  font-size: clamp(1rem, 3.8vw, 1.4rem);
+}
+
+.screen-table .result-badge {
+  min-height: var(--touch-target);
+  padding: 0 4vw;
+}
+
 @media (max-width: 860px) {
   .lobby-grid,
   .detail-grid,
@@ -671,8 +738,8 @@ input {
 
 @media (max-width: 720px) {
   :root {
-    --card-width: 78px;
-    --card-height: 114px;
+    --card-width: min(18vw, 4.5rem);
+    --card-height: min(26vw, 6.4rem);
   }
 
   .app-shell {
@@ -710,7 +777,7 @@ input {
   .control-button {
     width: 100%;
     min-width: 0;
-    min-height: 56px;
+    min-height: var(--touch-target);
   }
 
   .cards-row {
@@ -721,8 +788,8 @@ input {
 
 @media (max-width: 560px) {
   :root {
-    --card-width: 64px;
-    --card-height: 96px;
+    --card-width: min(17vw, 4rem);
+    --card-height: min(24vw, 5.8rem);
   }
 
   .table-frame {
@@ -735,11 +802,19 @@ input {
   }
 
   .status-ribbon,
-  .actions,
   .screen-tabs,
   .stats-grid,
   .hero-stats {
     grid-template-columns: 1fr;
+  }
+
+  .screen-table .status-ribbon {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .screen-table .actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .felt-table {
@@ -765,5 +840,59 @@ input {
 
   .card-corner {
     font-size: 0.88rem;
+  }
+
+  .screen-table .table-frame {
+    padding: 3vw;
+  }
+
+  .screen-table .app-topbar {
+    gap: 2vw;
+  }
+
+  .screen-table .app-topbar h1 {
+    font-size: clamp(1.35rem, 6vw, 1.8rem);
+  }
+
+  .screen-table .topbar-copy,
+  .screen-table .screen-tabs {
+    display: none;
+  }
+
+  .screen-table .profile-pill {
+    min-width: 0;
+    width: 100%;
+    padding: 2vw 3vw;
+  }
+
+  .screen-table .sound-toggle,
+  .screen-table .connection-pill {
+    min-height: var(--touch-target);
+    font-size: 0.78rem;
+  }
+
+  .screen-table .felt-table::before {
+    inset: 2vw;
+  }
+
+  .screen-table .felt-table::after {
+    inset: 7vw 8vw 3vw;
+  }
+
+  .screen-table .hand-panel {
+    padding: 2.2vw;
+  }
+
+  .screen-table .cards-row {
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+
+  .screen-table .action-dock {
+    gap: 2vw;
+  }
+
+  .screen-table .action-copy p {
+    margin-bottom: 1vw;
   }
 }

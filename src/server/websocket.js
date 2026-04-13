@@ -2,15 +2,16 @@ const { WebSocket, WebSocketServer } = require("ws");
 const { TableManager } = require("./tableManager");
 
 const createWebSocketServer = ({ server, sessionManager, tableOptions = {} }) => {
-  const wss = new WebSocketServer({ server, path: "/ws" });
+  const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 8 * 1024 });
   const sessionSubscriptions = new Map();
   const tableSubscriptions = new Map();
+  let publicTablesScheduled = false;
   const tableManager = new TableManager({
     ...tableOptions,
     sessionManager,
     onTableUpdate: (tableId, reason) => {
       broadcastTable(tableId, reason);
-      broadcastPublicTables();
+      schedulePublicTablesBroadcast();
     },
     onSessionUpdate: (sessionId) => {
       broadcastSession(sessionId);
@@ -26,7 +27,7 @@ const createWebSocketServer = ({ server, sessionManager, tableOptions = {} }) =>
         tableSubscriptions.delete(tableId);
       }
 
-      broadcastPublicTables();
+      schedulePublicTablesBroadcast();
     }
   });
 
@@ -34,6 +35,18 @@ const createWebSocketServer = ({ server, sessionManager, tableOptions = {} }) =>
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(payload));
     }
+  };
+
+  const schedulePublicTablesBroadcast = () => {
+    if (publicTablesScheduled) {
+      return;
+    }
+
+    publicTablesScheduled = true;
+    queueMicrotask(() => {
+      publicTablesScheduled = false;
+      broadcastPublicTables();
+    });
   };
 
   const readPlayerContext = (ws, message = {}) => {
@@ -219,7 +232,7 @@ const createWebSocketServer = ({ server, sessionManager, tableOptions = {} }) =>
             tableId: message.tableId || ws.tableId,
             playerId,
             action: message.action,
-            bet: message.bet
+            bet: Number.isFinite(Number(message.bet)) ? Math.floor(Number(message.bet)) : message.bet
           });
           broadcastSession(result.session.id);
           send(ws, { type: "table_action_result", data: result });
@@ -244,7 +257,14 @@ const createWebSocketServer = ({ server, sessionManager, tableOptions = {} }) =>
         }
 
         if (message.type === "start_round") {
-          const session = sessionManager.startRound(message.sessionId, message.bet);
+          const session = sessionManager.startRound(message.sessionId, Math.floor(Number(message.bet)));
+          broadcastSession(message.sessionId);
+          send(ws, { type: "command_result", data: session });
+          return;
+        }
+
+        if (message.type === "set_table_mode") {
+          const session = sessionManager.setTableMode(message.sessionId, message.tableMode);
           broadcastSession(message.sessionId);
           send(ws, { type: "command_result", data: session });
           return;

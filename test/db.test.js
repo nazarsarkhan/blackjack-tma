@@ -111,7 +111,7 @@ test("free rounds refresh and consumption are persisted", () => {
 
     const creditTransactions = db
       .getTransactions(user.id)
-      .filter((entry) => entry.type === "free_round_credit");
+      .filter((entry) => entry.type === "free_round_used");
     assert.equal(creditTransactions.length, 3);
   } finally {
     db.close();

@@ -86,3 +86,156 @@ test("session manager settles free-round wins without debiting balance", () => {
     db.close();
   }
 });
+
+test("session manager converts double without funds into stand", () => {
+  const db = new BlackjackDatabase({
+    dbPath: createTempDbPath(),
+    startingBalance: 100
+  });
+
+  try {
+    const sessionManager = new SessionManager({
+      userStore: db,
+      minBet: 10,
+      monetizationService: null
+    });
+    sessionManager.engine = {
+      createRound({ sessionId, playerId, bet }) {
+        return {
+          id: `${sessionId}-cash-round`,
+          sessionId,
+          playerId,
+          bet,
+          mainBet: bet,
+          totalWager: bet,
+          payout: 0,
+          outcome: null,
+          status: "player_turn",
+          activeHandIndex: 0,
+          stakeSource: "balance",
+          hands: {
+            player: {
+              cards: [{ rank: "9", value: 9 }, { rank: "7", value: 7 }]
+            },
+            dealer: {
+              cards: [{ rank: "10", value: 10 }, { rank: "6", value: 6 }]
+            }
+          },
+          playerHands: [
+            {
+              cards: [{ rank: "9", value: 9 }, { rank: "7", value: 7 }],
+              bet,
+              doubled: false,
+              isStanding: false,
+              isSplitHand: false,
+              outcome: null,
+              payout: 0
+            }
+          ]
+        };
+      },
+      applyAction(round, action) {
+        assert.equal(action, "stand");
+        round.status = "finished";
+        round.outcome = "dealer_win";
+      },
+      presentRound(round) {
+        return {
+          id: round.id,
+          status: round.status,
+          payout: round.payout,
+          playerHands: round.playerHands,
+          hands: {
+            player: { score: { total: 16, isBust: false, isBlackjack: false } },
+            dealer: { score: { total: 17, isBust: false, isBlackjack: false } }
+          }
+        };
+      }
+    };
+    const session = sessionManager.createSession({ playerId: "tg-low-funds" });
+    const internalSession = sessionManager.getSession(session.id);
+    internalSession.balance = 100;
+    db.statements.updateUserBalance.run(100, internalSession.userId);
+
+    sessionManager.startRound(session.id, 100);
+    const updated = sessionManager.applyAction(session.id, "double");
+
+    assert.equal(updated.currentRound.status, "finished");
+    assert.equal(updated.currentRound.playerHands[0].doubled, false);
+  } finally {
+    db.close();
+  }
+});
+
+test("session manager supports free tables with isolated session balance", () => {
+  const db = new BlackjackDatabase({
+    dbPath: createTempDbPath(),
+    startingBalance: 500
+  });
+
+  try {
+    const sessionManager = new SessionManager({
+      userStore: db,
+      minBet: 10,
+      monetizationService: null
+    });
+    sessionManager.engine = {
+      createRound({ sessionId, playerId, bet }) {
+        return {
+          id: `${sessionId}-free-round`,
+          sessionId,
+          playerId,
+          bet,
+          mainBet: bet,
+          totalWager: bet,
+          payout: 0,
+          outcome: null,
+          status: "player_turn",
+          activeHandIndex: 0,
+          stakeSource: "free_table",
+          hands: {
+            player: { cards: [{ rank: "9", value: 9 }, { rank: "8", value: 8 }] },
+            dealer: { cards: [{ rank: "10", value: 10 }, { rank: "6", value: 6 }] }
+          },
+          playerHands: [
+            {
+              cards: [{ rank: "9", value: 9 }, { rank: "8", value: 8 }],
+              bet,
+              doubled: false,
+              isStanding: false,
+              isSplitHand: false,
+              outcome: null,
+              payout: 0
+            }
+          ]
+        };
+      },
+      presentRound(round) {
+        return {
+          id: round.id,
+          status: round.status,
+          payout: round.payout,
+          playerHands: round.playerHands,
+          hands: {
+            player: { score: { total: 17, isBust: false, isBlackjack: false } },
+            dealer: { score: { total: 16, isBust: false, isBlackjack: false } }
+          }
+        };
+      }
+    };
+
+    const session = sessionManager.createSession({
+      playerId: "tg-free-table",
+      metadata: { tableMode: "free" }
+    });
+
+    assert.equal(session.tableMode, "free");
+    assert.equal(session.freeBalance, 1000);
+
+    const started = sessionManager.startRound(session.id, 100);
+    assert.equal(started.freeBalance, 900);
+    assert.equal(db.getUserById(started.userId).balance, 500);
+  } finally {
+    db.close();
+  }
+});

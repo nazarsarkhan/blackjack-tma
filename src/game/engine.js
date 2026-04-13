@@ -210,6 +210,7 @@ class GameEngine {
       bet,
       doubled: false,
       isStanding: false,
+      isSplitAceHand: Boolean(options.isSplitAceHand),
       isSplitHand: Boolean(options.isSplitHand),
       outcome: null,
       payout: 0
@@ -275,14 +276,15 @@ class GameEngine {
     }
 
     const actions = ["hit", "stand"];
-    if (hand.cards.length === 2 && !hand.doubled) {
+    if (hand.cards.length === 2 && !hand.doubled && !hand.isSplitAceHand) {
       actions.push("double");
     }
 
     if (
       round.activeHandIndex === 0 &&
       this.getPlayerHands(round).length === 1 &&
-      this.canSplitHand(hand)
+      this.canSplitHand(hand) &&
+      !hand.isSplitHand
     ) {
       actions.push("split");
     }
@@ -486,6 +488,11 @@ class GameEngine {
       throw new Error("No active hand");
     }
 
+    if (hand.isSplitAceHand) {
+      hand.isStanding = true;
+      return this.advanceToNextHandOrDealer(round);
+    }
+
     hand.cards.push(this.drawCard());
     const playerScore = scoreHand(hand.cards);
 
@@ -512,7 +519,7 @@ class GameEngine {
 
   double(round) {
     const hand = this.getActivePlayerHand(round);
-    if (!hand || hand.cards.length !== 2) {
+    if (!hand || hand.cards.length !== 2 || hand.isSplitAceHand) {
       throw new Error("Double is only allowed on the initial two-card hand");
     }
 
@@ -543,14 +550,26 @@ class GameEngine {
 
     const [firstCard, secondCard] = hand.cards;
     const splitBet = hand.bet;
-    const firstHand = this.createPlayerHand([firstCard, this.drawCard()], splitBet, { isSplitHand: true });
-    const secondHand = this.createPlayerHand([secondCard, this.drawCard()], splitBet, { isSplitHand: true });
+    const splittingAces = firstCard.rank === "A" && secondCard.rank === "A";
+    const firstHand = this.createPlayerHand([firstCard, this.drawCard()], splitBet, {
+      isSplitHand: true,
+      isSplitAceHand: splittingAces
+    });
+    const secondHand = this.createPlayerHand([secondCard, this.drawCard()], splitBet, {
+      isSplitHand: true,
+      isSplitAceHand: splittingAces
+    });
 
     round.playerHands = [firstHand, secondHand];
     round.hands.player.cards = firstHand.cards;
     round.bet += splitBet;
     round.totalWager += splitBet;
     round.activeHandIndex = 0;
+
+    if (splittingAces) {
+      firstHand.isStanding = true;
+      return this.advanceToNextHandOrDealer(round);
+    }
 
     this.updateAvailableActions(round);
     return round;
@@ -659,6 +678,7 @@ class GameEngine {
       doubled: hand.doubled,
       outcome: hand.outcome,
       payout: hand.payout,
+      isSplitAceHand: hand.isSplitAceHand,
       isSplitHand: hand.isSplitHand,
       isActive: round.status === "player_turn" && index === round.activeHandIndex
     }));

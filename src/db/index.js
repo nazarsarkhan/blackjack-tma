@@ -485,9 +485,9 @@ class BlackjackDatabase {
       `),
       updateUserProfile: this.db.prepare(`
         UPDATE users
-        SET username = @username,
-            first_name = @firstName,
-            last_name = @lastName,
+        SET username = COALESCE(NULLIF(@username, ''), username),
+            first_name = COALESCE(NULLIF(@firstName, ''), first_name),
+            last_name = COALESCE(NULLIF(@lastName, ''), last_name),
             updated_at = CURRENT_TIMESTAMP
         WHERE telegram_id = @telegramId
       `),
@@ -1066,7 +1066,7 @@ class BlackjackDatabase {
       this.statements.insertTransaction.run(
         userId,
         null,
-        "free_round_credit",
+        "free_round_used",
         0,
         refreshedUser.balance,
         refreshedUser.balance,
@@ -1301,7 +1301,7 @@ class BlackjackDatabase {
 
       const gameId = Number(gameResult.lastInsertRowid);
 
-      this.statements.updateUserStats.run(1, betAmount, Math.max(netResult, 0), userId);
+      this.statements.updateUserStats.run(1, betAmount, payoutAmount, userId);
       this.applyWinStreak(userId, outcome);
 
       if (stakeSource === "balance") {
@@ -1514,7 +1514,7 @@ class BlackjackDatabase {
   getWeeklyTournament({ limit = 100, userId = null, now = new Date() } = {}) {
     const weekStart = startOfUtcWeek(now).toISOString();
     const weekEnd = endOfUtcWeek(now).toISOString();
-    const rows = this.statements.getWeeklyTournamentRows.all(weekStart, weekEnd, Math.max(limit, 100));
+    const rows = this.statements.getWeeklyTournamentRows.all(weekStart, weekEnd, Math.min(Math.max(limit, 1), 100));
     const leaderboard = rows.slice(0, limit).map((row, index) => ({
       rank: index + 1,
       userId: row.userId,
