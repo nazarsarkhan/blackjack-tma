@@ -1,15 +1,19 @@
 const { WebSocket, WebSocketServer } = require("ws");
 const { TableManager } = require("./tableManager");
 
-const createWebSocketServer = ({ server, sessionManager }) => {
+const createWebSocketServer = ({ server, sessionManager, tableOptions = {} }) => {
   const wss = new WebSocketServer({ server, path: "/ws" });
   const sessionSubscriptions = new Map();
   const tableSubscriptions = new Map();
   const tableManager = new TableManager({
+    ...tableOptions,
     sessionManager,
     onTableUpdate: (tableId, reason) => {
       broadcastTable(tableId, reason);
       broadcastPublicTables();
+    },
+    onSessionUpdate: (sessionId) => {
+      broadcastSession(sessionId);
     },
     onTableRemoved: (tableId) => {
       const peers = tableSubscriptions.get(tableId);
@@ -169,6 +173,7 @@ const createWebSocketServer = ({ server, sessionManager }) => {
 
         if (message.type === "create_table") {
           const { playerId, metadata } = readPlayerContext(ws, message);
+          detachSubscription(sessionSubscriptions, ws, "sessionId");
           const table = tableManager.createTable({
             ownerId: playerId,
             metadata,
@@ -182,6 +187,7 @@ const createWebSocketServer = ({ server, sessionManager }) => {
 
         if (message.type === "join_table") {
           const { playerId, metadata } = readPlayerContext(ws, message);
+          detachSubscription(sessionSubscriptions, ws, "sessionId");
           const table = tableManager.joinTable({
             tableId: message.tableId,
             inviteCode: message.inviteCode,
@@ -194,8 +200,9 @@ const createWebSocketServer = ({ server, sessionManager }) => {
         }
 
         if (message.type === "subscribe_table") {
+          const { playerId } = readPlayerContext(ws, message);
+          const table = tableManager.getTableForPlayer(message.tableId, playerId);
           attachSubscription(tableSubscriptions, ws, message.tableId, "tableId");
-          const table = tableManager.getTable(message.tableId, ws.playerId || null);
           send(ws, { type: "table_update", reason: "subscribed", data: table });
           return;
         }
@@ -214,6 +221,7 @@ const createWebSocketServer = ({ server, sessionManager }) => {
             action: message.action,
             bet: message.bet
           });
+          broadcastSession(result.session.id);
           send(ws, { type: "table_action_result", data: result });
           return;
         }

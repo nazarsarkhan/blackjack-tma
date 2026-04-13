@@ -204,12 +204,122 @@ class GameEngine {
     return Object.values(sideBets).reduce((sum, sideBet) => sum + (sideBet?.payout || 0), 0);
   }
 
+  createPlayerHand(cards, bet, options = {}) {
+    return {
+      cards,
+      bet,
+      doubled: false,
+      isStanding: false,
+      isSplitHand: Boolean(options.isSplitHand),
+      outcome: null,
+      payout: 0
+    };
+  }
+
+  getPlayerHands(round) {
+    if (!Array.isArray(round.playerHands) || round.playerHands.length === 0) {
+      round.playerHands = [this.createPlayerHand(round.hands.player.cards, round.bet)];
+    }
+
+    return round.playerHands;
+  }
+
+  getActivePlayerHand(round) {
+    return this.getPlayerHands(round)[round.activeHandIndex ?? 0] ?? null;
+  }
+
+  canSplitHand(hand) {
+    return Boolean(
+      hand &&
+        hand.cards.length === 2 &&
+        hand.cards[0] &&
+        hand.cards[1] &&
+        hand.cards[0].rank === hand.cards[1].rank
+    );
+  }
+
+  updateRoundOutcome(round) {
+    const playerHands = this.getPlayerHands(round);
+    const totalPayout = playerHands.reduce((sum, hand) => sum + (hand.payout || 0), 0);
+    const totalBet = playerHands.reduce((sum, hand) => sum + hand.bet, 0);
+    const netResult = totalPayout - totalBet;
+
+    if (playerHands.every((hand) => hand.outcome === "push")) {
+      round.outcome = "push";
+    } else if (playerHands.some((hand) => hand.outcome === "player_blackjack")) {
+      round.outcome = "player_blackjack";
+    } else if (netResult > 0) {
+      round.outcome = "player_win";
+    } else if (netResult < 0) {
+      round.outcome = "dealer_win";
+    } else {
+      round.outcome = "push";
+    }
+
+    round.mainPayout = totalPayout;
+    round.bet = totalBet;
+  }
+
+  updateAvailableActions(round) {
+    if (round.status !== "player_turn") {
+      round.actions = [];
+      return;
+    }
+
+    const hand = this.getActivePlayerHand(round);
+    if (!hand) {
+      round.actions = [];
+      return;
+    }
+
+    const actions = ["hit", "stand"];
+    if (hand.cards.length === 2 && !hand.doubled) {
+      actions.push("double");
+    }
+
+    if (
+      round.activeHandIndex === 0 &&
+      this.getPlayerHands(round).length === 1 &&
+      this.canSplitHand(hand)
+    ) {
+      actions.push("split");
+    }
+
+    if (
+      round.activeHandIndex === 0 &&
+      hand.cards.length === 2 &&
+      round.hands.dealer.cards[0]?.rank === "A" &&
+      !round.sideBets.insurance?.bet
+    ) {
+      actions.push("insurance");
+    }
+
+    round.actions = actions;
+  }
+
+  advanceToNextHandOrDealer(round) {
+    const nextHandIndex = this.getPlayerHands(round).findIndex(
+      (hand, index) => index > (round.activeHandIndex ?? 0) && !hand.isStanding && !scoreHand(hand.cards).isBust
+    );
+
+    if (nextHandIndex !== -1) {
+      round.activeHandIndex = nextHandIndex;
+      this.updateAvailableActions(round);
+      return round;
+    }
+
+    return this.runDealerTurn(round);
+  }
+
   collectRoundCards(round) {
     if (round.cardsCollected) {
       return;
     }
 
-    this.updateRunningCount([...round.hands.player.cards, ...round.hands.dealer.cards]);
+    this.updateRunningCount([
+      ...this.getPlayerHands(round).flatMap((hand) => hand.cards),
+      ...round.hands.dealer.cards
+    ]);
     round.cardsCollected = true;
   }
 
@@ -271,7 +381,8 @@ class GameEngine {
       sideBetPayout: 0,
       finishedAt: null,
       createdAt: new Date().toISOString(),
-      actions: ["hit", "stand", "double"],
+      actions: [],
+      activeHandIndex: 0,
       hands: {
         player: {
           cards: playerCards
@@ -280,6 +391,7 @@ class GameEngine {
           cards: dealerCards
         }
       },
+      playerHands: [this.createPlayerHand(playerCards, bet)],
       sideBets: sideBetState,
       anticheat: {
         suspicion: anticheat.profile.suspicion,
@@ -295,22 +407,24 @@ class GameEngine {
       }
     };
 
-    if (dealerCards[0].rank === "A" && !round.sideBets.insurance) {
-      round.actions.push("insurance");
-    }
-
     this.settleInitialSideBets(round);
     this.evaluateNaturals(round);
+    if (round.status === "player_turn") {
+      this.updateAvailableActions(round);
+    }
     return round;
   }
 
   evaluateNaturals(round) {
-    const playerScore = scoreHand(round.hands.player.cards);
+    const playerHand = this.getPlayerHands(round)[0];
+    const playerScore = scoreHand(playerHand.cards);
     const dealerScore = scoreHand(round.hands.dealer.cards);
 
     if (playerScore.isBlackjack || dealerScore.isBlackjack) {
-      const outcome = this.resolveOutcome(playerScore, dealerScore, round.bet, true);
-      this.finishRound(round, outcome.result, outcome.payout);
+      const outcome = this.resolveOutcome(playerScore, dealerScore, playerHand.bet, true);
+      playerHand.outcome = outcome.result;
+      playerHand.payout = outcome.payout;
+      this.finishRound(round);
     }
   }
 
@@ -326,6 +440,8 @@ class GameEngine {
         return this.stand(round);
       case "double":
         return this.double(round);
+      case "split":
+        return this.split(round);
       case "insurance":
         return this.insurance(round);
       default:
@@ -334,7 +450,8 @@ class GameEngine {
   }
 
   insurance(round) {
-    if (round.hands.player.cards.length !== 2 || round.hands.dealer.cards[0]?.rank !== "A") {
+    const hand = this.getActivePlayerHand(round);
+    if (!hand || hand.cards.length !== 2 || round.hands.dealer.cards[0]?.rank !== "A") {
       throw new Error("Insurance is only allowed on the opening deal against a dealer ace");
     }
 
@@ -357,43 +474,84 @@ class GameEngine {
     round.totalWager += insuranceBet;
     round.sideBetPayout = this.summarizeSideBetPayout(round.sideBets);
     round.payout = round.mainPayout + round.sideBetPayout;
-    round.actions = round.actions.filter((candidate) => candidate !== "insurance");
+    this.updateAvailableActions(round);
     return round;
   }
 
   hit(round) {
-    round.hands.player.cards.push(this.drawCard());
-    const playerScore = scoreHand(round.hands.player.cards);
-
-    if (playerScore.isBust) {
-      this.finishRound(round, "dealer_win", 0);
-      return round;
+    const hand = this.getActivePlayerHand(round);
+    if (!hand) {
+      throw new Error("No active hand");
     }
 
-    round.actions = ["hit", "stand"];
+    hand.cards.push(this.drawCard());
+    const playerScore = scoreHand(hand.cards);
+
+    if (playerScore.isBust) {
+      hand.outcome = "dealer_win";
+      hand.payout = 0;
+      hand.isStanding = true;
+      return this.advanceToNextHandOrDealer(round);
+    }
+
+    this.updateAvailableActions(round);
     return round;
   }
 
   stand(round) {
-    return this.runDealerTurn(round);
+    const hand = this.getActivePlayerHand(round);
+    if (!hand) {
+      throw new Error("No active hand");
+    }
+
+    hand.isStanding = true;
+    return this.advanceToNextHandOrDealer(round);
   }
 
   double(round) {
-    if (round.hands.player.cards.length !== 2) {
+    const hand = this.getActivePlayerHand(round);
+    if (!hand || hand.cards.length !== 2) {
       throw new Error("Double is only allowed on the initial two-card hand");
     }
 
-    round.bet *= 2;
-    round.totalWager += round.mainBet;
-    round.hands.player.cards.push(this.drawCard());
+    hand.bet *= 2;
+    hand.doubled = true;
+    round.bet += hand.bet / 2;
+    round.totalWager += hand.bet / 2;
+    hand.cards.push(this.drawCard());
 
-    const playerScore = scoreHand(round.hands.player.cards);
+    const playerScore = scoreHand(hand.cards);
     if (playerScore.isBust) {
-      this.finishRound(round, "dealer_win", 0);
-      return round;
+      hand.outcome = "dealer_win";
+      hand.payout = 0;
+      hand.isStanding = true;
+      return this.advanceToNextHandOrDealer(round);
     }
 
-    return this.runDealerTurn(round);
+    hand.isStanding = true;
+    return this.advanceToNextHandOrDealer(round);
+  }
+
+  split(round) {
+    const hand = this.getActivePlayerHand(round);
+    const playerHands = this.getPlayerHands(round);
+    if (round.activeHandIndex !== 0 || playerHands.length !== 1 || !this.canSplitHand(hand)) {
+      throw new Error("Split is only allowed on the opening pair");
+    }
+
+    const [firstCard, secondCard] = hand.cards;
+    const splitBet = hand.bet;
+    const firstHand = this.createPlayerHand([firstCard, this.drawCard()], splitBet, { isSplitHand: true });
+    const secondHand = this.createPlayerHand([secondCard, this.drawCard()], splitBet, { isSplitHand: true });
+
+    round.playerHands = [firstHand, secondHand];
+    round.hands.player.cards = firstHand.cards;
+    round.bet += splitBet;
+    round.totalWager += splitBet;
+    round.activeHandIndex = 0;
+
+    this.updateAvailableActions(round);
+    return round;
   }
 
   runDealerTurn(round) {
@@ -413,10 +571,19 @@ class GameEngine {
       round.hands.dealer.cards.push(this.drawCard());
     }
 
-    const playerScore = scoreHand(round.hands.player.cards);
     const dealerScore = scoreHand(round.hands.dealer.cards);
-    const resolution = this.resolveOutcome(playerScore, dealerScore, round.bet, false);
-    this.finishRound(round, resolution.result, resolution.payout);
+    for (const hand of this.getPlayerHands(round)) {
+      if (hand.outcome) {
+        continue;
+      }
+
+      const playerScore = scoreHand(hand.cards);
+      const resolution = this.resolveOutcome(playerScore, dealerScore, hand.bet, false);
+      hand.outcome = resolution.result;
+      hand.payout = resolution.payout;
+    }
+
+    this.finishRound(round);
     return round;
   }
 
@@ -460,11 +627,12 @@ class GameEngine {
     return { result: "push", payout: bet };
   }
 
-  finishRound(round, result, payout) {
+  finishRound(round) {
     round.status = "finished";
     round.finishedAt = new Date().toISOString();
-    round.outcome = result;
-    round.mainPayout = payout;
+    round.activeHandIndex = null;
+
+    this.updateRoundOutcome(round);
 
     if (round.sideBets.insurance?.settled === false) {
       round.sideBets.insurance = this.settleInsurance(round);
@@ -482,7 +650,20 @@ class GameEngine {
   }
 
   presentRound(round, revealDealer = round.status === "finished") {
-    const playerScore = scoreHand(round.hands.player.cards);
+    const playerHands = this.getPlayerHands(round).map((hand, index) => ({
+      cards: hand.cards,
+      score: scoreHand(hand.cards),
+      bet: hand.bet,
+      doubled: hand.doubled,
+      outcome: hand.outcome,
+      payout: hand.payout,
+      isSplitHand: hand.isSplitHand,
+      isActive: round.status === "player_turn" && index === round.activeHandIndex
+    }));
+    const activeHand = playerHands[round.activeHandIndex ?? 0] ?? playerHands[0] ?? {
+      cards: [],
+      score: scoreHand([])
+    };
     const dealerCards = revealDealer
       ? round.hands.dealer.cards
       : [round.hands.dealer.cards[0], { hidden: true }];
@@ -506,6 +687,7 @@ class GameEngine {
       createdAt: round.createdAt,
       finishedAt: round.finishedAt,
       actions: [...round.actions],
+      activeHandIndex: round.activeHandIndex,
       shoeRemaining: this.shoe.length,
       shufflePending: this.pendingShuffle,
       sideBets: round.sideBets,
@@ -516,14 +698,15 @@ class GameEngine {
       },
       hands: {
         player: {
-          cards: round.hands.player.cards,
-          score: playerScore
+          cards: activeHand.cards,
+          score: activeHand.score
         },
         dealer: {
           cards: dealerCards,
           score: dealerScore
         }
-      }
+      },
+      playerHands
     };
   }
 }

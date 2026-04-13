@@ -17,6 +17,8 @@ class TableManager {
     this.chatHistoryLimit = options.chatHistoryLimit || CHAT_HISTORY_LIMIT;
     this.onTableUpdate = options.onTableUpdate || (() => {});
     this.onTableRemoved = options.onTableRemoved || (() => {});
+    this.onSessionUpdate = options.onSessionUpdate || (() => {});
+    this.now = options.now || (() => Date.now());
     this.tables = new Map();
     this.playerTableIndex = new Map();
     this.turnTimers = new Map();
@@ -35,7 +37,13 @@ class TableManager {
       throw new Error("Table not found");
     }
 
+    this.assertTableVisible(table, viewerPlayerId);
     return this.presentTable(table, viewerPlayerId);
+  }
+
+  getTableForPlayer(tableId, playerId) {
+    const table = this.resolveMembership(tableId, playerId);
+    return this.presentTable(table, playerId);
   }
 
   createTable({ ownerId, metadata = null, name, visibility = "public" }) {
@@ -59,6 +67,7 @@ class TableManager {
 
     this.tables.set(table.id, table);
     this.joinExistingTable(table, { playerId: ownerId, metadata });
+    this.startTurnTimer(table);
     this.emitTableUpdate(table.id, "table_created");
     return this.presentTable(table, ownerId);
   }
@@ -67,6 +76,9 @@ class TableManager {
     this.assertPlayerAvailable(playerId);
     const table = this.resolveTable({ tableId, inviteCode });
     this.joinExistingTable(table, { playerId, metadata });
+    if (table.players.length > 1 && !table.turnExpiresAt) {
+      this.startTurnTimer(table);
+    }
     this.emitTableUpdate(table.id, "player_joined");
     return this.presentTable(table, playerId);
   }
@@ -92,10 +104,14 @@ class TableManager {
 
     if (!table.turnPlayerId) {
       table.turnPlayerId = table.players[0].playerId;
+      this.startTurnTimer(table);
     } else if (removedCurrentTurn) {
       this.advanceTurn(table, playerIndex);
+    } else {
+      this.startTurnTimer(table);
     }
 
+    table.status = this.getTableStatus(table);
     this.emitTableUpdate(table.id, "player_left");
     return {
       table: this.presentTable(table, playerId),
@@ -121,11 +137,14 @@ class TableManager {
 
     this.touchTable(table);
     const roundFinished = !session.currentRound || session.currentRound.status === "finished";
+    this.onSessionUpdate(session.id, roundFinished ? "round_finished" : "round_updated");
 
     if (roundFinished) {
+      table.status = "waiting";
       this.advanceTurn(table);
       this.emitTableUpdate(table.id, "turn_advanced");
     } else {
+      table.status = "playing";
       this.startTurnTimer(table);
       this.emitTableUpdate(table.id, "turn_updated");
     }
@@ -200,6 +219,7 @@ class TableManager {
       table.turnPlayerId = playerId;
     }
 
+    table.status = this.getTableStatus(table);
     this.touchTable(table);
   }
 
@@ -278,6 +298,31 @@ class TableManager {
     return player;
   }
 
+  assertTableVisible(table, viewerPlayerId) {
+    const isSeated = table.players.some((player) => player.playerId === viewerPlayerId);
+    if (table.visibility === "private" && !isSeated) {
+      throw new Error("Private table access is only available to seated players");
+    }
+  }
+
+  getTableStatus(table) {
+    if (!table.turnPlayerId) {
+      return "waiting";
+    }
+
+    const activePlayer = table.players.find((player) => player.playerId === table.turnPlayerId);
+    if (!activePlayer) {
+      return "waiting";
+    }
+
+    try {
+      const session = this.sessionManager.getSession(activePlayer.sessionId);
+      return session.currentRound && session.currentRound.status !== "finished" ? "playing" : "waiting";
+    } catch {
+      return "waiting";
+    }
+  }
+
   advanceTurn(table, departingIndex = null) {
     this.clearTurnTimer(table.id);
 
@@ -295,22 +340,20 @@ class TableManager {
 
     table.turnPlayerId = table.players[nextIndex].playerId;
     table.turnExpiresAt = null;
+    table.status = this.getTableStatus(table);
     this.touchTable(table);
-
-    if (table.status === "playing") {
-      this.startTurnTimer(table);
-    }
+    this.startTurnTimer(table);
   }
 
   startTurnTimer(table) {
     this.clearTurnTimer(table.id);
 
-    if (!table.turnPlayerId || table.status !== "playing") {
+    if (!table.turnPlayerId) {
       table.turnExpiresAt = null;
       return;
     }
 
-    table.turnExpiresAt = new Date(Date.now() + this.turnDurationMs).toISOString();
+    table.turnExpiresAt = new Date(this.now() + this.turnDurationMs).toISOString();
     const timer = setTimeout(() => {
       this.handleTurnTimeout(table.id);
     }, this.turnDurationMs);
@@ -326,10 +369,17 @@ class TableManager {
     }
 
     const activePlayer = this.getPlayer(table, table.turnPlayerId);
-    const session = this.sessionManager.getSession(activePlayer.sessionId);
+    let session = null;
 
-    if (session.currentRound && session.currentRound.status !== "finished") {
-      this.sessionManager.applyAction(activePlayer.sessionId, "stand");
+    try {
+      session = this.sessionManager.getSession(activePlayer.sessionId);
+    } catch {
+      session = null;
+    }
+
+    if (session?.currentRound && session.currentRound.status !== "finished") {
+      const updatedSession = this.sessionManager.applyAction(activePlayer.sessionId, "stand");
+      this.onSessionUpdate(updatedSession.id, "turn_timeout");
     }
 
     this.advanceTurn(table);
@@ -387,7 +437,7 @@ class TableManager {
         expiresAt: table.turnExpiresAt,
         durationMs: this.turnDurationMs,
         remainingMs: table.turnExpiresAt
-          ? Math.max(new Date(table.turnExpiresAt).getTime() - Date.now(), 0)
+          ? Math.max(new Date(table.turnExpiresAt).getTime() - this.now(), 0)
           : null
       },
       players: table.players.map((player) => this.presentPlayer(player)),
