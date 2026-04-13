@@ -507,19 +507,15 @@ export default function App() {
 
       <section className="table-frame">
         <header className="app-topbar">
-          <div>
-            <p className="eyebrow">Telegram Mini App</p>
+          <div className="brand-mark" aria-label="Blackjack Royale">
+            <span className="brand-logo">{customization.avatar ?? "🂡"}</span>
             <h1>Blackjack Royale</h1>
-            <p className="topbar-copy">
-              Еженедельные турниры, ачивки, рефералка, кастомизация стола и подробная статистика в одном лобби.
-            </p>
           </div>
 
           <div className="topbar-side">
             <div className="profile-pill">
-              <span className="avatar-coin">{customization.avatar ?? "🂡"}</span>
               <div>
-                <span>{telegram.user?.first_name ?? data.player.firstName ?? "Гость"}</span>
+                <span>{appState.connectionState === "live" ? "LIVE" : "DEMO"}</span>
                 <strong>{formatNumber(displayedBalance)} {isFreeTable ? "free chips" : "chips"}</strong>
               </div>
             </div>
@@ -535,9 +531,6 @@ export default function App() {
             >
               {appState.soundsEnabled ? "Sound On" : "Sound Off"}
             </button>
-            <div className={`connection-pill ${appState.connectionState}`}>
-              {appState.connectionState === "live" ? "LIVE" : "DEMO"}
-            </div>
           </div>
         </header>
 
@@ -657,23 +650,19 @@ export default function App() {
                       Бесплатный стол
                     </button>
                   </div>
-                  <div>
-                    <span className="eyebrow">{isFreeTable ? "Free balance" : "Ставка"}</span>
+                  <div className="status-item">
+                    <span className="eyebrow">{isFreeTable ? "Баланс free" : "Баланс"}</span>
                     <strong>{formatNumber(displayedBalance)} {isFreeTable ? "chips" : "chips"}</strong>
                   </div>
-                  <div>
-                    <span className="eyebrow">Текущая ставка</span>
+                  <div className="status-item">
+                    <span className="eyebrow">Ставка</span>
                     <strong>{formatNumber(round?.bet ?? appState.bet)} chips</strong>
                   </div>
-                  <div>
+                  <div className="status-item">
                     <span className="eyebrow">Игрок</span>
-                    <strong>{getSeatSubtitle(data.player)}</strong>
+                    <strong>{telegram.user?.first_name ?? data.player.firstName ?? "Гость"}</strong>
                   </div>
-                  <div>
-                    <span className="eyebrow">Кастомизация</span>
-                    <strong>{cardBackLabels[customization.cardBack] ?? customization.cardBack}</strong>
-                  </div>
-                  <div>
+                  <div className="status-item">
                     <span className="eyebrow">Колода</span>
                     <strong>{round?.shoeRemaining ?? 312} cards</strong>
                   </div>
@@ -733,7 +722,6 @@ export default function App() {
 
                 <footer className="action-dock">
                   <div className="action-copy">
-                    <p className="eyebrow">Управление</p>
                     <h3>
                       {canStart
                         ? "Выберите ставку и начинайте новую раздачу"
@@ -742,37 +730,45 @@ export default function App() {
                   </div>
 
                   <div className="actions">
-                    <ControlButton onClick={handleStartRound} disabled={appState.busy || !canStart}>
-                      {canStart ? "Deal" : "Redeal"}
-                    </ControlButton>
-                    <ControlButton
-                      onClick={() => handleAction("hit")}
-                      disabled={appState.busy || canStart || !round.actions.includes("hit")}
-                      variant="secondary"
-                    >
-                      Hit
-                    </ControlButton>
-                    <ControlButton
-                      onClick={() => handleAction("stand")}
-                      disabled={appState.busy || canStart || !round.actions.includes("stand")}
-                      variant="secondary"
-                    >
-                      Stand
-                    </ControlButton>
-                    <ControlButton
-                      onClick={() => handleAction("double")}
-                      disabled={appState.busy || canStart || !round.actions.includes("double")}
-                      variant="ghost"
-                    >
-                      Double
-                    </ControlButton>
-                    <ControlButton
-                      onClick={() => handleAction("split")}
-                      disabled={appState.busy || canStart || !round.actions.includes("split")}
-                      variant="ghost"
-                    >
-                      Split
-                    </ControlButton>
+                    {canStart ? (
+                      <ControlButton onClick={handleStartRound} disabled={appState.busy} wide>
+                        Deal
+                      </ControlButton>
+                    ) : (
+                      <>
+                        <ControlButton
+                          onClick={() => handleAction("hit")}
+                          disabled={appState.busy || !round.actions.includes("hit")}
+                          variant="secondary"
+                        >
+                          Hit
+                        </ControlButton>
+                        <ControlButton
+                          onClick={() => handleAction("stand")}
+                          disabled={appState.busy || !round.actions.includes("stand")}
+                          variant="secondary"
+                        >
+                          Stand
+                        </ControlButton>
+                        <ControlButton
+                          onClick={() => handleAction("double")}
+                          disabled={appState.busy || !round.actions.includes("double")}
+                          variant="ghost"
+                        >
+                          Double
+                        </ControlButton>
+                        <ControlButton
+                          onClick={() => handleAction("split")}
+                          disabled={appState.busy || !round.actions.includes("split")}
+                          variant="ghost"
+                        >
+                          Split
+                        </ControlButton>
+                        <ControlButton disabled variant="ghost">
+                          Surrender
+                        </ControlButton>
+                      </>
+                    )}
                   </div>
                 </footer>
               </>
