@@ -5,32 +5,42 @@ export function initTelegramApp() {
     return null;
   }
 
-  tg.ready();
   tg.expand();
+  tg.ready();
   tg.enableClosingConfirmation();
   tg.setHeaderColor("#0d3b2a");
   tg.setBackgroundColor("#072319");
+
+  document.documentElement.style.setProperty("--tg-color-scheme", tg.colorScheme ?? "dark");
 
   return tg;
 }
 
 export function bindViewportCssVars() {
+  const root = document.documentElement;
+
   if (!tg) {
+    root.style.setProperty("--tg-viewport-height", `${window.innerHeight}px`);
+    root.style.setProperty("--tg-viewport-stable-height", `${window.innerHeight}px`);
+    root.style.setProperty("--tg-color-scheme", "standalone");
     return () => {};
   }
 
   const applyViewport = () => {
     const viewportHeight = tg.viewportHeight || window.innerHeight;
     const stableHeight = tg.viewportStableHeight || viewportHeight;
-    document.documentElement.style.setProperty("--tg-viewport-height", `${viewportHeight}px`);
-    document.documentElement.style.setProperty("--tg-stable-height", `${stableHeight}px`);
+    root.style.setProperty("--tg-viewport-height", `${viewportHeight}px`);
+    root.style.setProperty("--tg-viewport-stable-height", `${stableHeight}px`);
+    root.style.setProperty("--tg-color-scheme", tg.colorScheme ?? "dark");
   };
 
   applyViewport();
   tg.onEvent?.("viewportChanged", applyViewport);
+  tg.onEvent?.("themeChanged", applyViewport);
 
   return () => {
     tg.offEvent?.("viewportChanged", applyViewport);
+    tg.offEvent?.("themeChanged", applyViewport);
   };
 }
 
