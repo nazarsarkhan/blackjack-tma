@@ -1,5 +1,11 @@
 const SUITS = ["hearts", "diamonds", "clubs", "spades"];
 const RANKS = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+const SUIT_COLORS = {
+  hearts: "red",
+  diamonds: "red",
+  clubs: "black",
+  spades: "black"
+};
 
 const rankValue = (rank) => {
   if (rank === "A") {
@@ -43,7 +49,35 @@ const shuffle = (cards, random = Math.random) => {
   return deck;
 };
 
+const hiLoValue = (card) => {
+  if (["2", "3", "4", "5", "6"].includes(card.rank)) {
+    return 1;
+  }
+
+  if (["10", "J", "Q", "K", "A"].includes(card.rank)) {
+    return -1;
+  }
+
+  return 0;
+};
+
+const cardColor = (card) => SUIT_COLORS[card.suit] || "unknown";
+
+const pickCutCardPosition = (
+  shoeSize,
+  random = Math.random,
+  minPenetration = 0.6,
+  maxPenetration = 0.75
+) => {
+  const min = Math.max(1, Math.floor(shoeSize * minPenetration));
+  const max = Math.max(min, Math.floor(shoeSize * maxPenetration));
+  return min + Math.floor(random() * (max - min + 1));
+};
+
 module.exports = {
+  cardColor,
   buildShoe,
+  hiLoValue,
+  pickCutCardPosition,
   shuffle
 };

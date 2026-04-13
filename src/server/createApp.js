@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const path = require("path");
 
 const parseErrorStatus = (message) => {
   if (message.includes("not found") || message.includes("No active round")) {
@@ -37,9 +38,15 @@ const getUserOr404 = (userStore, telegramId, res) => {
 
 const createApp = ({ sessionManager, userStore }) => {
   const app = express();
+  const distPath = path.resolve(__dirname, "../../dist");
 
   app.use(cors());
   app.use(express.json());
+  app.use(express.static(distPath));
+
+  app.get("/", (_req, res) => {
+    res.sendFile(path.join(distPath, "index.html"));
+  });
 
   app.get("/health", (_req, res) => {
     res.json({ ok: true });

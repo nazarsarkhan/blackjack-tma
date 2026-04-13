@@ -1,36 +1,97 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 const WS_URL = import.meta.env.VITE_WS_URL ?? "";
+const DEMO_STORAGE_KEY = "blackjack-mini-app-demo";
+const suits = ["hearts", "diamonds", "clubs", "spades"];
+const ranks = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
 
-const suits = ["♠", "♥", "♦", "♣"];
-const values = ["A", "2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K"];
+const defaultDemoState = {
+  balance: 1000,
+  history: []
+};
 
-function drawRandomCard() {
-  const suit = suits[Math.floor(Math.random() * suits.length)];
-  const value = values[Math.floor(Math.random() * values.length)];
-  return { suit, value, hidden: false };
+function getPlayerId(user) {
+  const userId = user?.id ?? user?.telegramId;
+  if (userId) {
+    return String(userId);
+  }
+
+  const cached = window.localStorage.getItem("blackjack-demo-player-id");
+  if (cached) {
+    return cached;
+  }
+
+  const generated = `demo-${Math.random().toString(36).slice(2, 10)}`;
+  window.localStorage.setItem("blackjack-demo-player-id", generated);
+  return generated;
 }
 
-function calculateHand(hand) {
+function getDemoState() {
+  try {
+    const raw = window.localStorage.getItem(DEMO_STORAGE_KEY);
+    return raw ? { ...defaultDemoState, ...JSON.parse(raw) } : defaultDemoState;
+  } catch {
+    return defaultDemoState;
+  }
+}
+
+function saveDemoState(state) {
+  window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(state));
+}
+
+function request(path, options = {}) {
+  return fetch(`${API_BASE}${path}`, {
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers
+    },
+    ...options
+  }).then(async (response) => {
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `Request failed: ${response.status}`);
+    }
+
+    return response.json();
+  });
+}
+
+function cardValue(rank) {
+  if (rank === "A") {
+    return 11;
+  }
+
+  if (["K", "Q", "J"].includes(rank)) {
+    return 10;
+  }
+
+  return Number(rank);
+}
+
+function drawCard() {
+  const rank = ranks[Math.floor(Math.random() * ranks.length)];
+  const suit = suits[Math.floor(Math.random() * suits.length)];
+
+  return {
+    code: `${rank}${suit[0].toUpperCase()}`,
+    rank,
+    suit,
+    value: cardValue(rank)
+  };
+}
+
+function scoreHand(cards) {
   let total = 0;
   let aces = 0;
 
-  hand.forEach((card) => {
+  cards.forEach((card) => {
     if (card.hidden) {
       return;
     }
 
-    if (card.value === "A") {
+    total += card.value;
+    if (card.rank === "A") {
       aces += 1;
-      total += 11;
-      return;
     }
-
-    if (["K", "Q", "J"].includes(card.value)) {
-      total += 10;
-      return;
-    }
-
-    total += Number(card.value);
   });
 
   while (total > 21 && aces > 0) {
@@ -38,133 +99,422 @@ function calculateHand(hand) {
     aces -= 1;
   }
 
-  return total;
+  return {
+    total,
+    isSoft: aces > 0,
+    isBlackjack: cards.filter((card) => !card.hidden).length === 2 && total === 21,
+    isBust: total > 21
+  };
 }
 
-function createDemoState() {
-  const playerCards = [drawRandomCard(), drawRandomCard()];
-  const dealerCards = [drawRandomCard(), { ...drawRandomCard(), hidden: true }];
-  const playerScore = calculateHand(playerCards);
-  const dealerScore = calculateHand(dealerCards);
+function resolveRound(playerScore, dealerScore, bet, naturalCheck = false) {
+  if (playerScore.isBlackjack && dealerScore.isBlackjack) {
+    return { outcome: "push", payout: bet };
+  }
+
+  if (playerScore.isBlackjack) {
+    return { outcome: "player_blackjack", payout: bet + bet * 1.5 };
+  }
+
+  if (dealerScore.isBlackjack) {
+    return { outcome: "dealer_blackjack", payout: 0 };
+  }
+
+  if (naturalCheck) {
+    return { outcome: "push", payout: bet };
+  }
+
+  if (playerScore.isBust) {
+    return { outcome: "dealer_win", payout: 0 };
+  }
+
+  if (dealerScore.isBust || playerScore.total > dealerScore.total) {
+    return { outcome: "player_win", payout: bet * 2 };
+  }
+
+  if (playerScore.total < dealerScore.total) {
+    return { outcome: "dealer_win", payout: 0 };
+  }
+
+  return { outcome: "push", payout: bet };
+}
+
+function createPresentedRound(round, revealDealer = round.status === "finished") {
+  const dealerCards = revealDealer
+    ? round.hands.dealer.cards
+    : [round.hands.dealer.cards[0], { hidden: true }];
 
   return {
-    gameId: `demo-${Date.now()}`,
-    status: playerScore === 21 ? "blackjack" : "player_turn",
-    bet: 25,
-    balance: 1000,
+    id: round.id,
+    sessionId: round.sessionId,
+    playerId: round.playerId,
+    bet: round.bet,
+    status: round.status,
+    outcome: round.outcome,
+    payout: round.payout,
+    createdAt: round.createdAt,
+    finishedAt: round.finishedAt,
+    actions: [...round.actions],
+    shoeRemaining: 312,
+    hands: {
+      player: {
+        cards: round.hands.player.cards,
+        score: scoreHand(round.hands.player.cards)
+      },
+      dealer: {
+        cards: dealerCards,
+        score: scoreHand(dealerCards.filter((card) => !card.hidden))
+      }
+    }
+  };
+}
+
+function mapDemoHistoryItem(item) {
+  return {
+    id: item.id,
+    sessionId: item.sessionId,
+    betAmount: item.betAmount,
+    payoutAmount: item.payoutAmount,
+    netResult: item.netResult,
+    outcome: item.outcome,
+    playerHands: item.playerHands,
+    dealerHand: item.dealerHand,
+    finishedAt: item.finishedAt
+  };
+}
+
+function calculateDemoStats(state) {
+  const stats = {
+    balance: state.balance,
+    gamesPlayed: state.history.length,
+    totalWagered: state.history.reduce((sum, item) => sum + item.betAmount, 0),
+    totalWon: state.history.reduce((sum, item) => sum + item.payoutAmount, 0),
+    wins: state.history.filter((item) => ["win", "blackjack"].includes(item.outcome)).length,
+    pushes: state.history.filter((item) => item.outcome === "push").length,
+    losses: state.history.filter((item) => ["lose", "bust"].includes(item.outcome)).length,
+    lastGameAt: state.history[0]?.finishedAt ?? null
+  };
+
+  return stats;
+}
+
+function createDemoSession(user) {
+  const state = getDemoState();
+
+  return {
+    id: `demo-session-${getPlayerId(user)}`,
+    playerId: getPlayerId(user),
+    userId: getPlayerId(user),
+    balance: state.balance,
+    currentRound: null,
+    history: []
+  };
+}
+
+function bootstrapDemo(user) {
+  const state = getDemoState();
+
+  return {
+    isDemo: true,
     player: {
-      cards: playerCards,
-      score: playerScore
+      telegramId: getPlayerId(user),
+      firstName: user?.first_name ?? "Гость",
+      username: user?.username ?? "demo_player",
+      balance: state.balance
     },
-    dealer: {
-      cards: dealerCards,
-      score: dealerScore
-    },
-    result: null,
-    isDemo: true
+    session: createDemoSession(user),
+    history: state.history.map(mapDemoHistoryItem),
+    stats: calculateDemoStats(state)
   };
 }
 
-async function request(path, options = {}) {
-  if (!API_BASE) {
-    throw new Error("API is not configured");
-  }
+function finishDemoRound(session, round) {
+  const state = getDemoState();
+  const netResult = round.payout - round.bet;
+  const outcome =
+    round.outcome === "player_blackjack"
+      ? "blackjack"
+      : round.outcome === "player_win"
+        ? "win"
+        : round.outcome === "push"
+          ? "push"
+          : scoreHand(round.hands.player.cards).isBust
+            ? "bust"
+            : "lose";
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers
+  const historyItem = {
+    id: round.id,
+    sessionId: session.id,
+    betAmount: round.bet,
+    payoutAmount: round.payout,
+    netResult,
+    outcome,
+    playerHands: [
+      {
+        cards: round.hands.player.cards,
+        score: scoreHand(round.hands.player.cards)
+      }
+    ],
+    dealerHand: {
+      cards: round.hands.dealer.cards,
+      score: scoreHand(round.hands.dealer.cards)
     },
-    ...options
-  });
+    finishedAt: round.finishedAt
+  };
 
-  if (!response.ok) {
-    throw new Error(`API request failed: ${response.status}`);
-  }
+  const nextState = {
+    balance: state.balance + netResult,
+    history: [historyItem, ...state.history].slice(0, 12)
+  };
 
-  return response.json();
-}
-
-function settleDemo(state) {
-  const dealerCards = state.dealer.cards.map((card) => ({ ...card, hidden: false }));
-  let dealerScore = calculateHand(dealerCards);
-
-  while (dealerScore < 17) {
-    dealerCards.push(drawRandomCard());
-    dealerScore = calculateHand(dealerCards);
-  }
-
-  const playerScore = calculateHand(state.player.cards);
-  let result = "push";
-
-  if (playerScore > 21) {
-    result = "lose";
-  } else if (dealerScore > 21 || playerScore > dealerScore) {
-    result = "win";
-  } else if (playerScore < dealerScore) {
-    result = "lose";
-  }
-
-  const balanceDelta = result === "win" ? state.bet : result === "lose" ? -state.bet : 0;
+  saveDemoState(nextState);
 
   return {
-    ...state,
-    status: "finished",
-    dealer: { cards: dealerCards, score: dealerScore },
-    player: { ...state.player, score: playerScore },
-    balance: state.balance + balanceDelta,
-    result
+    ...session,
+    balance: nextState.balance,
+    currentRound: createPresentedRound(round, true),
+    history: [createPresentedRound(round, true), ...session.history].slice(0, 10)
   };
 }
 
-export async function createGame() {
+function createDemoRound(sessionId, playerId, bet) {
+  const round = {
+    id: `${sessionId}:${Date.now()}`,
+    sessionId,
+    playerId,
+    bet,
+    status: "player_turn",
+    outcome: null,
+    payout: 0,
+    createdAt: new Date().toISOString(),
+    finishedAt: null,
+    actions: ["hit", "stand", "double"],
+    hands: {
+      player: { cards: [drawCard(), drawCard()] },
+      dealer: { cards: [drawCard(), drawCard()] }
+    }
+  };
+
+  const playerScore = scoreHand(round.hands.player.cards);
+  const dealerScore = scoreHand(round.hands.dealer.cards);
+
+  if (playerScore.isBlackjack || dealerScore.isBlackjack) {
+    const resolution = resolveRound(playerScore, dealerScore, bet, true);
+    round.status = "finished";
+    round.finishedAt = new Date().toISOString();
+    round.actions = [];
+    round.outcome = resolution.outcome;
+    round.payout = resolution.payout;
+  }
+
+  return round;
+}
+
+function runDealerTurn(round) {
+  while (true) {
+    const dealerScore = scoreHand(round.hands.dealer.cards);
+    if (dealerScore.total > 17) {
+      break;
+    }
+
+    if (dealerScore.total === 17 && !dealerScore.isSoft) {
+      break;
+    }
+
+    round.hands.dealer.cards.push(drawCard());
+  }
+
+  const resolution = resolveRound(
+    scoreHand(round.hands.player.cards),
+    scoreHand(round.hands.dealer.cards),
+    round.bet
+  );
+
+  round.status = "finished";
+  round.finishedAt = new Date().toISOString();
+  round.actions = [];
+  round.outcome = resolution.outcome;
+  round.payout = resolution.payout;
+  return round;
+}
+
+function deriveWsUrl() {
+  if (WS_URL) {
+    return WS_URL;
+  }
+
+  if (!window.location?.host) {
+    return "";
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/ws`;
+}
+
+export async function bootstrapGame(user) {
   try {
-    return await request("/api/game", { method: "POST" });
+    const playerId = getPlayerId(user);
+    const player = await request("/api/users", {
+      method: "POST",
+      body: JSON.stringify({
+        telegramId: playerId,
+        username: user?.username ?? null,
+        firstName: user?.first_name ?? null,
+        lastName: user?.last_name ?? null
+      })
+    });
+
+    const session = await request("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        playerId,
+        metadata: {
+          username: user?.username ?? null,
+          firstName: user?.first_name ?? null,
+          lastName: user?.last_name ?? null
+        }
+      })
+    });
+
+    const [history, stats] = await Promise.all([
+      request(`/api/users/${playerId}/games?limit=12`),
+      request(`/api/users/${playerId}/stats`)
+    ]);
+
+    return {
+      isDemo: false,
+      player,
+      session,
+      history,
+      stats
+    };
   } catch {
-    return createDemoState();
+    return bootstrapDemo(user);
   }
 }
 
-export async function hit(gameState) {
-  try {
-    return await request(`/api/game/${gameState.gameId}/hit`, { method: "POST" });
-  } catch {
-    const playerCards = [...gameState.player.cards, drawRandomCard()];
-    const score = calculateHand(playerCards);
-    const busted = score > 21;
-
-    return busted
-      ? settleDemo({
-          ...gameState,
-          player: { cards: playerCards, score }
-        })
-      : {
-          ...gameState,
-          player: { cards: playerCards, score },
-          status: "player_turn"
-        };
+export async function refreshProfile(playerId, isDemo = false) {
+  if (isDemo) {
+    const state = getDemoState();
+    return {
+      history: state.history.map(mapDemoHistoryItem),
+      stats: calculateDemoStats(state)
+    };
   }
+
+  const [history, stats] = await Promise.all([
+    request(`/api/users/${playerId}/games?limit=12`),
+    request(`/api/users/${playerId}/stats`)
+  ]);
+
+  return { history, stats };
 }
 
-export async function stand(gameState) {
-  try {
-    return await request(`/api/game/${gameState.gameId}/stand`, { method: "POST" });
-  } catch {
-    return settleDemo(gameState);
+export async function startRound({ session, bet, isDemo }) {
+  if (isDemo) {
+    const round = createDemoRound(session.id, session.playerId, bet);
+    if (round.status === "finished") {
+      return finishDemoRound(session, round);
+    }
+
+    return {
+      ...session,
+      currentRound: createPresentedRound(round)
+    };
   }
+
+  return request(`/api/sessions/${session.id}/rounds`, {
+    method: "POST",
+    body: JSON.stringify({ bet })
+  });
 }
 
-export function connectGameSocket(onMessage) {
-  if (!WS_URL) {
+export async function applyRoundAction({ session, action, isDemo }) {
+  if (isDemo) {
+    if (!session.currentRound) {
+      throw new Error("No active round");
+    }
+
+    const round = {
+      ...session.currentRound,
+      hands: {
+        player: { cards: [...session.currentRound.hands.player.cards] },
+        dealer: {
+          cards: session.currentRound.hands.dealer.cards.filter((card) => !card.hidden)
+        }
+      },
+      actions: [...session.currentRound.actions]
+    };
+
+    if (action === "hit") {
+      round.hands.player.cards.push(drawCard());
+      const playerScore = scoreHand(round.hands.player.cards);
+      round.actions = ["hit", "stand"];
+      if (playerScore.isBust) {
+        round.status = "finished";
+        round.finishedAt = new Date().toISOString();
+        round.actions = [];
+        round.outcome = "dealer_win";
+        round.payout = 0;
+        return finishDemoRound(session, round);
+      }
+    }
+
+    if (action === "double") {
+      round.bet *= 2;
+      round.hands.player.cards.push(drawCard());
+      const playerScore = scoreHand(round.hands.player.cards);
+      if (playerScore.isBust) {
+        round.status = "finished";
+        round.finishedAt = new Date().toISOString();
+        round.actions = [];
+        round.outcome = "dealer_win";
+        round.payout = 0;
+        return finishDemoRound(session, round);
+      }
+
+      return finishDemoRound(session, runDealerTurn(round));
+    }
+
+    if (action === "stand") {
+      return finishDemoRound(session, runDealerTurn(round));
+    }
+
+    return {
+      ...session,
+      currentRound: createPresentedRound(round)
+    };
+  }
+
+  return request(`/api/sessions/${session.id}/actions/${action}`, {
+    method: "POST"
+  });
+}
+
+export function connectSessionSocket({ sessionId, onSession, onError }) {
+  const socketUrl = deriveWsUrl();
+  if (!socketUrl || !sessionId) {
     return () => {};
   }
 
-  const socket = new WebSocket(WS_URL);
+  const socket = new WebSocket(socketUrl);
+
+  socket.addEventListener("open", () => {
+    socket.send(JSON.stringify({ type: "subscribe", sessionId }));
+  });
+
   socket.addEventListener("message", (event) => {
     try {
-      onMessage(JSON.parse(event.data));
-    } catch {
-      onMessage(event.data);
+      const payload = JSON.parse(event.data);
+      if (payload.type === "session_update" && payload.data) {
+        onSession(payload.data);
+      }
+
+      if (payload.type === "error") {
+        onError?.(payload.error);
+      }
+    } catch (error) {
+      onError?.(error.message);
     }
   });
 
