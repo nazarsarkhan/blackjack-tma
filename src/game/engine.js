@@ -298,6 +298,10 @@ class GameEngine {
       actions.push("insurance");
     }
 
+    if (round.activeHandIndex === 0 && hand.cards.length === 2) {
+      actions.push("surrender");
+    }
+
     round.actions = actions;
   }
 
@@ -448,6 +452,8 @@ class GameEngine {
         return this.split(round);
       case "insurance":
         return this.insurance(round);
+      case "surrender":
+        return this.surrender(round);
       default:
         throw new Error(`Unsupported action: ${action}`);
     }
@@ -515,6 +521,37 @@ class GameEngine {
 
     hand.isStanding = true;
     return this.advanceToNextHandOrDealer(round);
+  }
+
+  surrender(round) {
+    const hand = this.getActivePlayerHand(round);
+    const playerHands = this.getPlayerHands(round);
+    if (!hand || round.activeHandIndex !== 0 || playerHands.length !== 1 || hand.cards.length !== 2) {
+      throw new Error("Surrender is only allowed on the opening hand");
+    }
+
+    hand.outcome = "dealer_win";
+    hand.payout = hand.bet / 2;
+    hand.isStanding = true;
+    round.status = "finished";
+    round.finishedAt = new Date().toISOString();
+    round.activeHandIndex = null;
+    this.updateRoundOutcome(round);
+
+    if (round.sideBets.insurance?.settled === false) {
+      round.sideBets.insurance = this.settleInsurance(round);
+    }
+
+    round.sideBetPayout = this.summarizeSideBetPayout(round.sideBets);
+    round.payout = round.mainPayout + round.sideBetPayout;
+    round.actions = [];
+    round.shoeState.cutCardReached = this.pendingShuffle;
+    round.shoeState.shufflePending = this.pendingShuffle;
+    round.shoeState.shuffleReason = this.lastShuffleReason;
+
+    this.collectRoundCards(round);
+    this.recordRoundForAnticheat(round);
+    return round;
   }
 
   double(round) {

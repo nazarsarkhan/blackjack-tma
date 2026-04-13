@@ -340,7 +340,11 @@ const createApp = ({ sessionManager, userStore, monetizationService = null }) =>
 
   app.post("/api/sessions/:sessionId/rounds", (req, res) => {
     try {
-      const session = sessionManager.startRound(req.params.sessionId, clampBet(req.body.bet));
+      const session = sessionManager.startRound(
+        req.params.sessionId,
+        clampBet(req.body.bet),
+        req.body.sideBets || {}
+      );
       res.status(201).json(session);
     } catch (error) {
       res.status(parseErrorStatus(error.message)).json({ error: error.message });
@@ -357,7 +361,7 @@ const createApp = ({ sessionManager, userStore, monetizationService = null }) =>
 
   app.post("/api/sessions/:sessionId/actions/:action", (req, res) => {
     try {
-      if (!["hit", "stand", "double", "split", "insurance"].includes(req.params.action)) {
+      if (!["hit", "stand", "double", "split", "insurance", "surrender"].includes(req.params.action)) {
         throw new Error("Unsupported action");
       }
       const session = sessionManager.applyAction(req.params.sessionId, req.params.action);

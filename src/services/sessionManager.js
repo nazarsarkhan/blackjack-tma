@@ -74,7 +74,7 @@ class SessionManager {
     return session;
   }
 
-  startRound(sessionId, bet) {
+  startRound(sessionId, bet, sideBets = {}) {
     const session = this.getSession(sessionId);
     const amount = this.validateBet(bet);
 
@@ -109,7 +109,8 @@ class SessionManager {
     const round = this.engine.createRound({
       sessionId: session.id,
       playerId: session.playerId,
-      bet: amount
+      bet: amount,
+      sideBets
     });
     round.stakeSource = stakeSource;
 
@@ -145,6 +146,17 @@ class SessionManager {
       }
     }
 
+    if (action === "insurance") {
+      const insuranceStake = this.getAdditionalStakeForAction(session.currentRound, action);
+      if (this.getAvailableBalanceForRound(session, session.currentRound) < insuranceStake) {
+        throw new Error("Insufficient balance");
+      }
+
+      if (session.tableMode === "free") {
+        session.freeBalance -= insuranceStake;
+      }
+    }
+
     this.engine.applyAction(session.currentRound, action);
     this.syncFinishedRound(session);
     session.updatedAt = new Date().toISOString();
@@ -168,6 +180,10 @@ class SessionManager {
 
     if (action === "double" || action === "split") {
       return activeHand.bet;
+    }
+
+    if (action === "insurance") {
+      return (round.mainBet || round.bet || 0) / 2;
     }
 
     return 0;

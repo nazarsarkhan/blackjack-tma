@@ -724,20 +724,59 @@ export async function claimReferral(playerId, referralCode, isDemo = false) {
   });
 }
 
-export async function startRound({ session, bet, isDemo }) {
+export async function claimDailyBonus(playerId, isDemo = false) {
   if (isDemo) {
+    const state = getDemoState();
+    const now = Date.now();
+    const nextDailyBonusAt = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+    saveDemoState({
+      ...state,
+      lastDailyBonusClaimedAt: new Date(now).toISOString(),
+      nextDailyBonusAt,
+      balance: state.balance + 500
+    });
+
+    return {
+      amount: 500,
+      nextDailyBonusAt,
+      balance: state.balance + 500
+    };
+  }
+
+  return request(`/api/users/${playerId}/bonuses/daily`, {
+    method: "POST"
+  });
+}
+
+export async function getChipPackages(isDemo = false) {
+  if (isDemo) {
+    return [
+      { id: "bronze", title: "Bronze Stack", chips: 2500, priceStars: 25 },
+      { id: "silver", title: "Silver Stack", chips: 12000, priceStars: 99 },
+      { id: "gold", title: "Gold Vault", chips: 50000, priceStars: 299 },
+      { id: "vip", title: "Platinum Room", chips: 150000, priceStars: 699 }
+    ];
+  }
+
+  return request("/api/monetization/packages");
+}
+
+export async function startRound({ session, bet, sideBets = {}, isDemo }) {
+  if (isDemo) {
+    const totalSideBets = Object.values(sideBets).reduce((sum, value) => sum + (Number(value) || 0), 0);
+    const totalRequired = bet + totalSideBets;
     if (session.tableMode === "free") {
-      if ((session.freeBalance ?? 0) < bet) {
+      if ((session.freeBalance ?? 0) < totalRequired) {
         throw new Error("Insufficient balance");
       }
       const round = createDemoRound(session.id, session.playerId, bet);
       if (round.status === "finished") {
-        return finishDemoRound({ ...session, freeBalance: session.freeBalance - bet }, round);
+        return finishDemoRound({ ...session, freeBalance: session.freeBalance - totalRequired }, round);
       }
 
       return {
         ...session,
-        freeBalance: session.freeBalance - bet,
+        freeBalance: session.freeBalance - totalRequired,
         currentRound: createPresentedRound(round)
       };
     }
@@ -755,7 +794,7 @@ export async function startRound({ session, bet, isDemo }) {
 
   return request(`/api/sessions/${session.id}/rounds`, {
     method: "POST",
-    body: JSON.stringify({ bet })
+    body: JSON.stringify({ bet, sideBets })
   });
 }
 
@@ -867,6 +906,26 @@ export async function applyRoundAction({ session, action, isDemo }) {
       const hand = getDemoActiveHand(round);
       hand.isStanding = true;
       return finishDemoRound(session, advanceDemoHand(round));
+    }
+
+    if (action === "insurance") {
+      if (round.hands.dealer.cards[0]?.rank !== "A") {
+        throw new Error("Insurance is only allowed on the opening deal against a dealer ace");
+      }
+
+      return {
+        ...session,
+        currentRound: createPresentedRound(round)
+      };
+    }
+
+    if (action === "surrender") {
+      const hand = getDemoActiveHand(round);
+      hand.outcome = "dealer_win";
+      hand.payout = hand.bet / 2;
+      hand.isStanding = true;
+      finalizeDemoRoundState(round);
+      return finishDemoRound(session, round);
     }
 
     return {
