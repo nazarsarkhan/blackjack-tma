@@ -248,6 +248,8 @@ class GameEngine {
       round.outcome = "push";
     } else if (playerHands.some((hand) => hand.outcome === "player_blackjack")) {
       round.outcome = "player_blackjack";
+    } else if (playerHands.every((hand) => hand.outcome === "dealer_blackjack")) {
+      round.outcome = "dealer_blackjack";
     } else if (netResult > 0) {
       round.outcome = "player_win";
     } else if (netResult < 0) {

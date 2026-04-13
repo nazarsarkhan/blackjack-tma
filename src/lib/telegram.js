@@ -14,6 +14,26 @@ export function initTelegramApp() {
   return tg;
 }
 
+export function bindViewportCssVars() {
+  if (!tg) {
+    return () => {};
+  }
+
+  const applyViewport = () => {
+    const viewportHeight = tg.viewportHeight || window.innerHeight;
+    const stableHeight = tg.viewportStableHeight || viewportHeight;
+    document.documentElement.style.setProperty("--tg-viewport-height", `${viewportHeight}px`);
+    document.documentElement.style.setProperty("--tg-stable-height", `${stableHeight}px`);
+  };
+
+  applyViewport();
+  tg.onEvent?.("viewportChanged", applyViewport);
+
+  return () => {
+    tg.offEvent?.("viewportChanged", applyViewport);
+  };
+}
+
 export function getTelegramContext() {
   if (!tg) {
     return {
@@ -26,7 +46,8 @@ export function getTelegramContext() {
   return {
     isTelegram: true,
     user: tg.initDataUnsafe?.user ?? null,
-    theme: tg.colorScheme ?? "unknown"
+    theme: tg.colorScheme ?? "unknown",
+    startParam: tg.initDataUnsafe?.start_param ?? null
   };
 }
 

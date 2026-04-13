@@ -15,7 +15,10 @@ const parseErrorStatus = (message) => {
     message.includes("only allowed") ||
     message.includes("Insufficient balance") ||
     message.includes("already claimed") ||
-    message.includes("Unknown Stars package")
+    message.includes("Unknown Stars package") ||
+    message.includes("Referral") ||
+    message.includes("Cannot use your own") ||
+    message.includes("not found")
   ) {
     return 400;
   }
@@ -201,6 +204,100 @@ const createApp = ({ sessionManager, userStore, monetizationService = null }) =>
       if (user) {
         res.json(userStore.getUserStats(user.id));
       }
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/users/:telegramId/profile", (req, res) => {
+    try {
+      const user = getUserOr404(userStore, req.params.telegramId, res);
+      if (!user) {
+        return;
+      }
+
+      res.json(userStore.getUserProfileBundle(user.id));
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/users/:telegramId/achievements", (req, res) => {
+    try {
+      const user = getUserOr404(userStore, req.params.telegramId, res);
+      if (!user) {
+        return;
+      }
+
+      res.json(userStore.getAchievements(user.id));
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/users/:telegramId/customization", (req, res) => {
+    try {
+      const user = getUserOr404(userStore, req.params.telegramId, res);
+      if (!user) {
+        return;
+      }
+
+      res.json(userStore.getCustomization(user.id));
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/users/:telegramId/customization", (req, res) => {
+    try {
+      const user = getUserOr404(userStore, req.params.telegramId, res);
+      if (!user) {
+        return;
+      }
+
+      res.json(
+        userStore.updateCustomization(user.id, {
+          avatar: req.body.avatar,
+          cardBack: req.body.cardBack,
+          tableTheme: req.body.tableTheme
+        })
+      );
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/users/:telegramId/referrals", (req, res) => {
+    try {
+      const user = getUserOr404(userStore, req.params.telegramId, res);
+      if (!user) {
+        return;
+      }
+
+      res.json(userStore.getReferralInfo(user.id));
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/users/:telegramId/referrals/claim", (req, res) => {
+    try {
+      const user = getUserOr404(userStore, req.params.telegramId, res);
+      if (!user) {
+        return;
+      }
+
+      res.json(userStore.applyReferralCode(user.id, req.body.referralCode));
+    } catch (error) {
+      res.status(parseErrorStatus(error.message)).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/tournaments/weekly", (req, res) => {
+    try {
+      const telegramId = req.query.telegramId ? String(req.query.telegramId) : null;
+      const user = telegramId ? userStore.getUserByTelegramId(telegramId) : null;
+      res.json(userStore.getWeeklyTournament({ userId: user?.id || null }));
     } catch (error) {
       res.status(parseErrorStatus(error.message)).json({ error: error.message });
     }

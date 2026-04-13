@@ -1,5 +1,6 @@
 import { startTransition, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
+import { useTranslation } from "react-i18next";
 import ControlButton from "./components/ControlButton";
 import HandPanel from "./components/HandPanel";
 import { playSound, unlockAudio } from "./lib/audio";
@@ -11,57 +12,74 @@ import {
   startRound
 } from "./lib/gameClient";
 import {
+  clearPersistedLanguage,
+  detectPreferredLanguage,
+  isLanguagePersisted,
+  isRtlLanguage,
+  normalizeLanguageCode,
+  persistLanguage,
+  SUPPORTED_LANGUAGES
+} from "./i18n";
+import {
+  bindViewportCssVars,
   getTelegramContext,
   haptic,
   initTelegramApp,
   setupMainButton
 } from "./lib/telegram";
 
-const screens = [
-  { id: "lobby", label: "Лобби" },
-  { id: "table", label: "Стол" },
-  { id: "history", label: "История" },
-  { id: "shop", label: "Фишки" }
-];
-
-const resultMeta = {
-  player_win: { label: "Выигрыш", tone: "win" },
-  player_blackjack: { label: "Blackjack 3:2", tone: "win" },
-  dealer_win: { label: "Казино забрало банк", tone: "lose" },
-  dealer_blackjack: { label: "У дилера blackjack", tone: "lose" },
-  push: { label: "Push", tone: "push" }
-};
-
 const chipPacks = [
-  { id: "bronze", title: "Bronze Stack", amount: 2500, stars: 49, accent: "bronze" },
-  { id: "silver", title: "Silver Stack", amount: 7000, stars: 99, accent: "silver" },
-  { id: "gold", title: "Gold Vault", amount: 15000, stars: 179, accent: "gold" },
-  { id: "vip", title: "Platinum Room", amount: 40000, stars: 399, accent: "platinum" }
+  { id: "bronze", amount: 2500, stars: 49, accent: "bronze" },
+  { id: "silver", amount: 7000, stars: 99, accent: "silver" },
+  { id: "gold", amount: 15000, stars: 179, accent: "gold" },
+  { id: "vip", amount: 40000, stars: 399, accent: "platinum" }
 ];
 
-function formatNumber(value) {
-  return new Intl.NumberFormat("ru-RU").format(value ?? 0);
-}
+function mapOutcomeLabel(outcome, t) {
+  const mapping = {
+    win: "outcomes.win",
+    lose: "outcomes.lose",
+    blackjack: "outcomes.blackjack",
+    bust: "outcomes.bust",
+    push: "outcomes.push",
+    player_win: "results.player_win",
+    player_blackjack: "results.player_blackjack",
+    dealer_win: "results.dealer_win",
+    dealer_blackjack: "results.dealer_blackjack"
+  };
 
-function formatDate(value) {
-  if (!value) {
-    return "Нет игр";
-  }
-
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "2-digit",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
-}
-
-function getSeatSubtitle(user) {
-  return user?.username ? `@${user.username}` : user?.firstName ?? "Seat 1";
+  return t(mapping[outcome] ?? "common.noGames");
 }
 
 export default function App() {
   const telegram = useMemo(() => getTelegramContext(), []);
+  const detectedLanguage = useMemo(
+    () => normalizeLanguageCode(telegram.user?.language_code),
+    [telegram.user?.language_code]
+  );
+  const [language, setLanguage] = useState(() => detectPreferredLanguage(telegram.user?.language_code));
+  const [manualLanguage, setManualLanguage] = useState(() => isLanguagePersisted());
+  const { t, i18n } = useTranslation();
+  const screens = useMemo(
+    () => [
+      { id: "lobby", label: t("screens.lobby") },
+      { id: "table", label: t("screens.table") },
+      { id: "history", label: t("screens.history") },
+      { id: "shop", label: t("screens.shop") },
+      { id: "settings", label: t("screens.settings") }
+    ],
+    [t]
+  );
+  const resultMeta = useMemo(
+    () => ({
+      player_win: { label: t("results.player_win"), tone: "win" },
+      player_blackjack: { label: t("results.player_blackjack"), tone: "win" },
+      dealer_win: { label: t("results.dealer_win"), tone: "lose" },
+      dealer_blackjack: { label: t("results.dealer_blackjack"), tone: "lose" },
+      push: { label: t("results.push"), tone: "push" }
+    }),
+    [t]
+  );
   const [appState, setAppState] = useState({
     loading: true,
     busy: false,
@@ -73,8 +91,39 @@ export default function App() {
     bet: 100
   });
 
+  const numberFormatter = useMemo(() => new Intl.NumberFormat(language), [language]);
+  const dateFormatter = useMemo(
+    () =>
+      new Intl.DateTimeFormat(language, {
+        day: "2-digit",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit"
+      }),
+    [language]
+  );
+
+  const formatNumber = (value) => numberFormatter.format(value ?? 0);
+  const formatDate = (value) => (value ? dateFormatter.format(new Date(value)) : t("common.noGames"));
+  const formatChips = (value) => `${formatNumber(value)} ${t("common.chips")}`;
+  const getSeatSubtitle = (user) => (user?.username ? `@${user.username}` : user?.firstName ?? t("common.seatFallback"));
+  const getHandStatus = (hand, roundStatus) => {
+    if (hand?.isActive && roundStatus === "player_turn") {
+      return t("table.yourTurn");
+    }
+
+    return hand?.outcome ? mapOutcomeLabel(hand.outcome, t) : t("table.inPlay");
+  };
+
+  useEffect(() => {
+    i18n.changeLanguage(language);
+    document.documentElement.lang = language;
+    document.documentElement.dir = isRtlLanguage(language) ? "rtl" : "ltr";
+  }, [i18n, language]);
+
   useEffect(() => {
     initTelegramApp();
+    const cleanupViewport = bindViewportCssVars();
 
     let mounted = true;
 
@@ -94,6 +143,7 @@ export default function App() {
 
     return () => {
       mounted = false;
+      cleanupViewport();
     };
   }, [telegram.user]);
 
@@ -120,11 +170,11 @@ export default function App() {
       onError: (message) => {
         setAppState((current) => ({
           ...current,
-          toast: message || "Ошибка сокета"
+          toast: message || t("toasts.socketError")
         }));
       }
     });
-  }, [appState.data?.isDemo, appState.data?.session?.id]);
+  }, [appState.data?.isDemo, appState.data?.session?.id, t]);
 
   useEffect(() => {
     const data = appState.data;
@@ -138,12 +188,12 @@ export default function App() {
       appState.activeScreen === "table"
         ? round
           ? roundFinished
-            ? "Новая раздача"
-            : "Stand"
-          : "Сесть за стол"
+            ? t("mainButton.newRound")
+            : t("mainButton.stand")
+          : t("mainButton.takeSeat")
         : appState.activeScreen === "shop"
-          ? "Открыть магазин"
-          : "К столу";
+          ? t("mainButton.openShop")
+          : t("mainButton.toTable");
 
     return setupMainButton({
       text,
@@ -158,7 +208,7 @@ export default function App() {
           startTransition(() => {
             setAppState((current) => ({
               ...current,
-              toast: "Покупки через Telegram Stars готовы к подключению на backend"
+              toast: t("toasts.shopUnavailable")
             }));
           });
           return;
@@ -177,7 +227,7 @@ export default function App() {
         handleAction("stand");
       }
     });
-  }, [appState.activeScreen, appState.busy, appState.data, telegram.isTelegram]);
+  }, [appState.activeScreen, appState.busy, appState.data, t, telegram.isTelegram]);
 
   async function syncProfile(isDemo = appState.data?.isDemo, playerId = appState.data?.player?.telegramId) {
     if (!playerId) {
@@ -306,6 +356,18 @@ export default function App() {
     }
   }
 
+  function handleLanguageSelect(code) {
+    persistLanguage(code);
+    setManualLanguage(true);
+    setLanguage(normalizeLanguageCode(code));
+  }
+
+  function handleAutoLanguage() {
+    clearPersistedLanguage();
+    setManualLanguage(false);
+    setLanguage(detectedLanguage);
+  }
+
   if (appState.loading || !appState.data) {
     return (
       <main className="app-shell loading-shell">
@@ -314,7 +376,7 @@ export default function App() {
           animate={{ scale: [0.92, 1, 0.92], rotate: [0, 10, -10, 0] }}
           transition={{ duration: 2.4, repeat: Number.POSITIVE_INFINITY }}
         />
-        <p>Подключаемся к столу...</p>
+        <p>{t("loading.connecting")}</p>
       </main>
     );
   }
@@ -324,6 +386,10 @@ export default function App() {
   const roundMeta = round ? resultMeta[round.outcome] : null;
   const canStart = !round || round.status === "finished";
   const stats = data.stats ?? {};
+  const playerHands =
+    round?.playerHands ?? (round?.hands?.player ? [{ ...round.hands.player, bet: round?.bet, isActive: true }] : []);
+  const activeHand = playerHands.find((hand) => hand.isActive) ?? playerHands[0] ?? null;
+  const isSplitRound = playerHands.length > 1;
 
   return (
     <main className="app-shell">
@@ -333,15 +399,15 @@ export default function App() {
       <section className="table-frame">
         <header className="app-topbar">
           <div>
-            <p className="eyebrow">Telegram Mini App</p>
+            <p className="eyebrow">{t("topbar.eyebrow")}</p>
             <h1>Blackjack Royale</h1>
-            <p className="topbar-copy">Зелёное сукно, быстрые раунды и house edge по казино-правилам.</p>
+            <p className="topbar-copy">{t("topbar.subtitle")}</p>
           </div>
 
           <div className="topbar-side">
             <div className="profile-pill">
-              <span>{telegram.user?.first_name ?? data.player.firstName ?? "Гость"}</span>
-              <strong>{formatNumber(data.session.balance ?? data.player.balance)} chips</strong>
+              <span>{telegram.user?.first_name ?? data.player.firstName ?? t("topbar.guest")}</span>
+              <strong>{formatChips(data.session.balance ?? data.player.balance)}</strong>
             </div>
             <button
               className="sound-toggle"
@@ -353,15 +419,15 @@ export default function App() {
                 }))
               }
             >
-              {appState.soundsEnabled ? "Sound On" : "Sound Off"}
+              {appState.soundsEnabled ? t("topbar.soundOn") : t("topbar.soundOff")}
             </button>
             <div className={`connection-pill ${appState.connectionState}`}>
-              {appState.connectionState === "live" ? "LIVE" : "DEMO"}
+              {appState.connectionState === "live" ? t("topbar.live") : t("topbar.demo")}
             </div>
           </div>
         </header>
 
-        <nav className="screen-tabs" aria-label="Навигация">
+        <nav className="screen-tabs" aria-label={t("nav.aria")}>
           {screens.map((screen) => (
             <button
               key={screen.id}
@@ -386,12 +452,9 @@ export default function App() {
             {appState.activeScreen === "lobby" && (
               <section className="lobby-grid">
                 <article className="hero-panel">
-                  <p className="eyebrow">Лобби</p>
-                  <h2>Садитесь за стол и запускайте быструю раздачу</h2>
-                  <p>
-                    Blackjack 3:2, дилер берёт на мягких 17, история игр и магазин фишек
-                    уже внутри Mini App.
-                  </p>
+                  <p className="eyebrow">{t("lobby.eyebrow")}</p>
+                  <h2>{t("lobby.title")}</h2>
+                  <p>{t("lobby.description")}</p>
 
                   <div className="bet-strip">
                     {[50, 100, 250, 500].map((value) => (
@@ -411,10 +474,10 @@ export default function App() {
                       onClick={canStart ? handleStartRound : () => navigate("table")}
                       disabled={appState.busy}
                     >
-                      {canStart ? "Начать раздачу" : "К текущему столу"}
+                      {canStart ? t("lobby.startRound") : t("lobby.currentTable")}
                     </ControlButton>
                     <ControlButton variant="secondary" onClick={() => navigate("history")}>
-                      История игр
+                      {t("lobby.history")}
                     </ControlButton>
                   </div>
                 </article>
@@ -422,30 +485,30 @@ export default function App() {
                 <article className="stats-panel">
                   <div className="stats-grid">
                     <div className="stat-card">
-                      <span>Баланс</span>
+                      <span>{t("lobby.balance")}</span>
                       <strong>{formatNumber(stats.balance ?? data.session.balance)}</strong>
                     </div>
                     <div className="stat-card">
-                      <span>Раундов</span>
+                      <span>{t("lobby.rounds")}</span>
                       <strong>{formatNumber(stats.gamesPlayed)}</strong>
                     </div>
                     <div className="stat-card">
-                      <span>Побед</span>
+                      <span>{t("lobby.wins")}</span>
                       <strong>{formatNumber(stats.wins)}</strong>
                     </div>
                     <div className="stat-card">
-                      <span>Push</span>
+                      <span>{t("lobby.pushes")}</span>
                       <strong>{formatNumber(stats.pushes)}</strong>
                     </div>
                   </div>
 
                   <div className="mini-summary">
                     <div>
-                      <span className="eyebrow">Последняя игра</span>
+                      <span className="eyebrow">{t("lobby.lastGame")}</span>
                       <strong>{formatDate(stats.lastGameAt)}</strong>
                     </div>
                     <div>
-                      <span className="eyebrow">Сумма ставок</span>
+                      <span className="eyebrow">{t("lobby.totalWagered")}</span>
                       <strong>{formatNumber(stats.totalWagered)}</strong>
                     </div>
                   </div>
@@ -457,90 +520,112 @@ export default function App() {
               <>
                 <section className="status-ribbon">
                   <div>
-                    <span className="eyebrow">Ставка</span>
-                    <strong>{formatNumber(round?.bet ?? appState.bet)} chips</strong>
+                    <span className="eyebrow">{t("table.bet")}</span>
+                    <strong>{formatChips(round?.bet ?? appState.bet)}</strong>
                   </div>
                   <div>
-                    <span className="eyebrow">Игрок</span>
+                    <span className="eyebrow">{t("actions.split")}</span>
+                    <strong>{activeHand ? `${(round?.activeHandIndex ?? 0) + 1}/${playerHands.length}` : "1/1"}</strong>
+                  </div>
+                  <div>
+                    <span className="eyebrow">{t("table.player")}</span>
                     <strong>{getSeatSubtitle(data.player)}</strong>
                   </div>
                   <div>
-                    <span className="eyebrow">Правила</span>
-                    <strong>Dealer hits soft 17</strong>
+                    <span className="eyebrow">{t("table.rules")}</span>
+                    <strong>{t("table.dealerHitsSoft17")}</strong>
                   </div>
                   <div>
-                    <span className="eyebrow">Колода</span>
-                    <strong>{round?.shoeRemaining ?? 312} cards</strong>
+                    <span className="eyebrow">{t("table.deck")}</span>
+                    <strong>
+                      {formatNumber(round?.shoeRemaining ?? 312)} {t("table.cards")}
+                    </strong>
                   </div>
                 </section>
 
                 <section className="felt-table">
                   <HandPanel
-                    title="Дилер"
-                    subtitle="Casino"
+                    title={t("table.dealer")}
+                    subtitle={t("table.casino")}
                     score={round?.hands?.dealer?.score}
                     cards={round?.hands?.dealer?.cards ?? []}
                     accent="emerald"
+                    compactCards={isSplitRound}
                   />
 
                   <div className="center-banner">
                     <div className="banner-ring" />
                     <div className="banner-copy">
-                      <p className="eyebrow">Стол</p>
+                      <p className="eyebrow">{t("table.yourTable")}</p>
                       <h2>
                         {!round
-                          ? "Готов к раздаче"
+                          ? t("table.ready")
                           : round.status === "finished"
-                            ? "Раунд закрыт"
-                            : "Ваш ход"}
+                            ? t("table.roundClosed")
+                            : t("table.yourTurn")}
                       </h2>
                       {roundMeta && <span className={`result-badge ${roundMeta.tone}`}>{roundMeta.label}</span>}
                     </div>
                   </div>
 
-                  <HandPanel
-                    title="Игрок"
-                    subtitle={getSeatSubtitle(data.player)}
-                    score={round?.hands?.player?.score}
-                    cards={round?.hands?.player?.cards ?? []}
-                    accent="gold"
-                  />
+                  <div className={`player-hands ${isSplitRound ? "split-layout" : ""}`}>
+                    {playerHands.map((hand, index) => (
+                      <HandPanel
+                        key={`player-hand-${index}`}
+                        title={isSplitRound ? `${t("table.player")} ${index + 1}` : t("table.player")}
+                        subtitle={getSeatSubtitle(data.player)}
+                        score={hand.score}
+                        cards={hand.cards ?? []}
+                        accent="gold"
+                        bet={formatChips(hand.bet ?? round?.bet ?? appState.bet)}
+                        status={getHandStatus(hand, round?.status)}
+                        active={hand.isActive}
+                        compactCards={isSplitRound}
+                      />
+                    ))}
+                  </div>
                 </section>
 
                 <footer className="action-dock">
                   <div className="action-copy">
-                    <p className="eyebrow">Управление</p>
-                    <h3>
-                      {canStart
-                        ? "Выберите ставку и начинайте новую раздачу"
-                        : "Hit, Stand или Double прямо в Mini App"}
-                    </h3>
+                    <p className="eyebrow">{t("table.controls")}</p>
+                    <h3>{canStart ? t("table.selectBet") : t("table.quickActions")}</h3>
                   </div>
 
                   <div className="actions">
                     <ControlButton onClick={handleStartRound} disabled={appState.busy || !canStart}>
-                      {canStart ? "Deal" : "Redeal"}
+                      {canStart ? t("actions.deal") : t("actions.redeal")}
                     </ControlButton>
                     <ControlButton
                       onClick={() => handleAction("hit")}
                       disabled={appState.busy || canStart || !round.actions.includes("hit")}
                       variant="secondary"
                     >
-                      Hit
+                      {t("actions.hit")}
                     </ControlButton>
                     <ControlButton
                       onClick={() => handleAction("stand")}
                       disabled={appState.busy || canStart || !round.actions.includes("stand")}
                       variant="secondary"
                     >
-                      Stand
+                      {t("actions.stand")}
                     </ControlButton>
                     <ControlButton
                       onClick={() => handleAction("double")}
                       disabled={appState.busy || canStart || !round.actions.includes("double")}
                       variant="ghost"
                     >
-                      Double
+                      {t("actions.double")}
+                    </ControlButton>
+                    <ControlButton
+                      onClick={() => handleAction("split")}
+                      disabled={appState.busy || canStart || !round.actions.includes("split")}
+                      variant="ghost"
+                    >
+                      {t("actions.split")}
+                    </ControlButton>
+                    <ControlButton disabled variant="ghost">
+                      {t("actions.surrender")}
                     </ControlButton>
                   </div>
                 </footer>
@@ -551,18 +636,18 @@ export default function App() {
               <section className="history-list">
                 <article className="section-head">
                   <div>
-                    <p className="eyebrow">История</p>
-                    <h2>Последние раздачи</h2>
+                    <p className="eyebrow">{t("history.eyebrow")}</p>
+                    <h2>{t("history.title")}</h2>
                   </div>
                   <ControlButton variant="secondary" onClick={() => syncProfile()}>
-                    Обновить
+                    {t("history.refresh")}
                   </ControlButton>
                 </article>
 
                 {data.history.length === 0 ? (
                   <div className="empty-card">
-                    <strong>Пока пусто</strong>
-                    <p>Сыграйте первую раздачу, чтобы здесь появилась история.</p>
+                    <strong>{t("history.emptyTitle")}</strong>
+                    <p>{t("history.emptyDescription")}</p>
                   </div>
                 ) : (
                   data.history.map((item) => (
@@ -574,11 +659,15 @@ export default function App() {
                     >
                       <div>
                         <span className="eyebrow">{formatDate(item.finishedAt)}</span>
-                        <h3>{item.outcome}</h3>
+                        <h3>{mapOutcomeLabel(item.outcome, t)}</h3>
                       </div>
                       <div className="history-metrics">
-                        <span>Bet {formatNumber(item.betAmount)}</span>
-                        <span>Payout {formatNumber(item.payoutAmount)}</span>
+                        <span>
+                          {t("history.bet")} {formatNumber(item.betAmount)}
+                        </span>
+                        <span>
+                          {t("history.payout")} {formatNumber(item.payoutAmount)}
+                        </span>
                         <strong className={item.netResult >= 0 ? "positive" : "negative"}>
                           {item.netResult >= 0 ? "+" : ""}
                           {formatNumber(item.netResult)}
@@ -594,36 +683,85 @@ export default function App() {
               <section className="shop-grid">
                 <article className="section-head shop-head">
                   <div>
-                    <p className="eyebrow">Магазин</p>
-                    <h2>Пакеты фишек для Telegram Stars</h2>
+                    <p className="eyebrow">{t("shop.eyebrow")}</p>
+                    <h2>{t("shop.title")}</h2>
                   </div>
-                  <p className="shop-note">UI готов, бэкенд-оплату можно подключить к этим пакетам без переделки экрана.</p>
+                  <p className="shop-note">{t("shop.note")}</p>
                 </article>
 
                 <div className="pack-grid">
-                  {chipPacks.map((pack) => (
-                    <motion.article
-                      key={pack.id}
-                      className={`pack-card ${pack.accent}`}
-                      whileHover={{ y: -6, rotate: -0.5 }}
-                    >
-                      <span className="eyebrow">Telegram Stars</span>
-                      <h3>{pack.title}</h3>
-                      <strong>{formatNumber(pack.amount)} chips</strong>
-                      <p>{pack.stars} Stars</p>
-                      <ControlButton
-                        onClick={() =>
-                          setAppState((current) => ({
-                            ...current,
-                            toast: `Пакет ${pack.title} подготовлен для интеграции со Stars`
-                          }))
-                        }
+                  {chipPacks.map((pack) => {
+                    const packTitle = t(`shop.packs.${pack.id}`);
+
+                    return (
+                      <motion.article
+                        key={pack.id}
+                        className={`pack-card ${pack.accent}`}
+                        whileHover={{ y: -6, rotate: -0.5 }}
                       >
-                        Выбрать
-                      </ControlButton>
-                    </motion.article>
-                  ))}
+                        <span className="eyebrow">Telegram {t("shop.stars")}</span>
+                        <h3>{packTitle}</h3>
+                        <strong>{formatChips(pack.amount)}</strong>
+                        <p>
+                          {formatNumber(pack.stars)} {t("shop.stars")}
+                        </p>
+                        <ControlButton
+                          onClick={() =>
+                            setAppState((current) => ({
+                              ...current,
+                              toast: t("toasts.packPrepared", { title: packTitle })
+                            }))
+                          }
+                        >
+                          {t("shop.select")}
+                        </ControlButton>
+                      </motion.article>
+                    );
+                  })}
                 </div>
+              </section>
+            )}
+
+            {appState.activeScreen === "settings" && (
+              <section className="settings-grid">
+                <article className="section-head settings-head">
+                  <div>
+                    <p className="eyebrow">{t("settings.eyebrow")}</p>
+                    <h2>{t("settings.title")}</h2>
+                  </div>
+                  <p className="shop-note">{t("settings.description")}</p>
+                </article>
+
+                <article className="settings-card">
+                  <div className="settings-copy">
+                    <span className="eyebrow">{t("settings.current")}</span>
+                    <strong>{SUPPORTED_LANGUAGES.find((entry) => entry.code === language)?.nativeLabel}</strong>
+                    <p>{manualLanguage ? t("settings.manual") : t("settings.autoDetected")}</p>
+                  </div>
+
+                  <div className="language-grid">
+                    <button
+                      type="button"
+                      className={!manualLanguage ? "language-button active" : "language-button"}
+                      onClick={handleAutoLanguage}
+                    >
+                      <span>{t("settings.autoDetected")}</span>
+                      <strong>{SUPPORTED_LANGUAGES.find((entry) => entry.code === detectedLanguage)?.nativeLabel}</strong>
+                    </button>
+
+                    {SUPPORTED_LANGUAGES.map((entry) => (
+                      <button
+                        key={entry.code}
+                        type="button"
+                        className={entry.code === language && manualLanguage ? "language-button active" : "language-button"}
+                        onClick={() => handleLanguageSelect(entry.code)}
+                      >
+                        <span>{entry.label}</span>
+                        <strong>{entry.nativeLabel}</strong>
+                      </button>
+                    ))}
+                  </div>
+                </article>
               </section>
             )}
           </motion.section>

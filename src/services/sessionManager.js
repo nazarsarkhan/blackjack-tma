@@ -46,6 +46,13 @@ class SessionManager {
       balance: user ? user.balance : null,
       freeRounds: user?.freeRounds ?? null,
       vipStatus: user?.vipStatus ?? null,
+      customization: user
+        ? {
+            avatar: user.avatar,
+            cardBack: user.cardBack,
+            tableTheme: user.tableTheme
+          }
+        : null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
@@ -83,6 +90,11 @@ class SessionManager {
       session.balance = reservedStake.balance;
       session.freeRounds = reservedStake.freeRounds;
       session.vipStatus = reservedStake.vipStatus;
+      session.customization = {
+        avatar: session.customization?.avatar ?? "🂡",
+        cardBack: session.customization?.cardBack ?? "classic",
+        tableTheme: session.customization?.tableTheme ?? "emerald"
+      };
     } else {
       this.ensureAvailableBalance(session, amount);
     }
@@ -108,8 +120,8 @@ class SessionManager {
       throw new Error("No active round");
     }
 
-    if (action === "double") {
-      this.ensureAvailableBalance(session, session.currentRound.bet);
+    if (action === "double" || action === "split") {
+      this.ensureAvailableBalance(session, this.getAdditionalStakeForAction(session.currentRound, action));
     }
 
     this.engine.applyAction(session.currentRound, action);
@@ -125,6 +137,19 @@ class SessionManager {
     }
 
     return amount;
+  }
+
+  getAdditionalStakeForAction(round, action) {
+    const activeHand = round.playerHands?.[round.activeHandIndex ?? 0];
+    if (!activeHand) {
+      return round.mainBet || round.bet || 0;
+    }
+
+    if (action === "double" || action === "split") {
+      return activeHand.bet;
+    }
+
+    return 0;
   }
 
   ensureAvailableBalance(session, requiredAmount) {
@@ -158,12 +183,13 @@ class SessionManager {
       payoutAmount: round.payout,
       outcome: this.mapRoundOutcome(round, presentedRound),
       stakeSource: round.stakeSource || "balance",
-      playerHands: [
-        {
-          cards: round.hands.player.cards,
-          score: presentedRound.hands.player.score
-        }
-      ],
+      playerHands: (presentedRound.playerHands || []).map((hand) => ({
+        cards: hand.cards,
+        score: hand.score,
+        bet: hand.bet,
+        outcome: hand.outcome,
+        payout: hand.payout
+      })),
       dealerHand: {
         cards: round.hands.dealer.cards,
         score: presentedRound.hands.dealer.score
@@ -188,11 +214,13 @@ class SessionManager {
   }
 
   mapRoundOutcome(round, presentedRound) {
+    const netResult = round.payout - round.bet;
+
     if (round.outcome === "player_blackjack") {
       return "blackjack";
     }
 
-    if (round.outcome === "player_win") {
+    if (round.outcome === "player_win" || netResult > 0) {
       return "win";
     }
 
@@ -212,6 +240,7 @@ class SessionManager {
       balance: session.balance,
       freeRounds: session.freeRounds,
       vipStatus: session.vipStatus,
+      customization: session.customization,
       createdAt: session.createdAt,
       updatedAt: session.updatedAt,
       currentRound: session.currentRound

@@ -139,7 +139,102 @@ function resolveRound(playerScore, dealerScore, bet, naturalCheck = false) {
   return { outcome: "push", payout: bet };
 }
 
+function createDemoPlayerHand(cards, bet, options = {}) {
+  return {
+    cards,
+    bet,
+    doubled: false,
+    isStanding: false,
+    isSplitHand: Boolean(options.isSplitHand),
+    outcome: null,
+    payout: 0
+  };
+}
+
+function getDemoPlayerHands(round) {
+  if (!Array.isArray(round.playerHands) || round.playerHands.length === 0) {
+    round.playerHands = [createDemoPlayerHand(round.hands.player.cards, round.bet)];
+  }
+
+  return round.playerHands;
+}
+
+function getDemoActiveHand(round) {
+  return getDemoPlayerHands(round)[round.activeHandIndex ?? 0] ?? null;
+}
+
+function canSplitDemoHand(hand) {
+  return Boolean(
+    hand &&
+      hand.cards.length === 2 &&
+      hand.cards[0] &&
+      hand.cards[1] &&
+      hand.cards[0].rank === hand.cards[1].rank
+  );
+}
+
+function updateDemoActions(round) {
+  if (round.status !== "player_turn") {
+    round.actions = [];
+    return;
+  }
+
+  const hand = getDemoActiveHand(round);
+  const actions = ["hit", "stand"];
+
+  if (hand?.cards.length === 2 && !hand.doubled) {
+    actions.push("double");
+  }
+
+  if (round.activeHandIndex === 0 && getDemoPlayerHands(round).length === 1 && canSplitDemoHand(hand)) {
+    actions.push("split");
+  }
+
+  round.actions = actions;
+}
+
+function finalizeDemoRoundState(round) {
+  const totalPayout = getDemoPlayerHands(round).reduce((sum, hand) => sum + (hand.payout || 0), 0);
+  const totalBet = getDemoPlayerHands(round).reduce((sum, hand) => sum + hand.bet, 0);
+  const netResult = totalPayout - totalBet;
+
+  round.bet = totalBet;
+  round.payout = totalPayout;
+  round.status = "finished";
+  round.finishedAt = new Date().toISOString();
+  round.actions = [];
+  round.activeHandIndex = null;
+
+  if (getDemoPlayerHands(round).every((hand) => hand.outcome === "push")) {
+    round.outcome = "push";
+  } else if (getDemoPlayerHands(round).some((hand) => hand.outcome === "player_blackjack")) {
+    round.outcome = "player_blackjack";
+  } else if (getDemoPlayerHands(round).every((hand) => hand.outcome === "dealer_blackjack")) {
+    round.outcome = "dealer_blackjack";
+  } else if (netResult > 0) {
+    round.outcome = "player_win";
+  } else if (netResult < 0) {
+    round.outcome = "dealer_win";
+  } else {
+    round.outcome = "push";
+  }
+}
+
 function createPresentedRound(round, revealDealer = round.status === "finished") {
+  const playerHands = getDemoPlayerHands(round).map((hand, index) => ({
+    cards: hand.cards,
+    score: scoreHand(hand.cards),
+    bet: hand.bet,
+    doubled: hand.doubled,
+    outcome: hand.outcome,
+    payout: hand.payout,
+    isSplitHand: hand.isSplitHand,
+    isActive: round.status === "player_turn" && index === round.activeHandIndex
+  }));
+  const activeHand = playerHands[round.activeHandIndex ?? 0] ?? playerHands[0] ?? {
+    cards: [],
+    score: scoreHand([])
+  };
   const dealerCards = revealDealer
     ? round.hands.dealer.cards
     : [round.hands.dealer.cards[0], { hidden: true }];
@@ -155,17 +250,19 @@ function createPresentedRound(round, revealDealer = round.status === "finished")
     createdAt: round.createdAt,
     finishedAt: round.finishedAt,
     actions: [...round.actions],
+    activeHandIndex: round.activeHandIndex,
     shoeRemaining: 312,
     hands: {
       player: {
-        cards: round.hands.player.cards,
-        score: scoreHand(round.hands.player.cards)
+        cards: activeHand.cards,
+        score: activeHand.score
       },
       dealer: {
         cards: dealerCards,
         score: scoreHand(dealerCards.filter((card) => !card.hidden))
       }
-    }
+    },
+    playerHands
   };
 }
 
@@ -218,7 +315,7 @@ function bootstrapDemo(user) {
     isDemo: true,
     player: {
       telegramId: getPlayerId(user),
-      firstName: user?.first_name ?? "Гость",
+      firstName: user?.first_name ?? null,
       username: user?.username ?? "demo_player",
       balance: state.balance
     },
@@ -238,7 +335,7 @@ function finishDemoRound(session, round) {
         ? "win"
         : round.outcome === "push"
           ? "push"
-          : scoreHand(round.hands.player.cards).isBust
+          : getDemoPlayerHands(round).every((hand) => scoreHand(hand.cards).isBust)
             ? "bust"
             : "lose";
 
@@ -249,12 +346,13 @@ function finishDemoRound(session, round) {
     payoutAmount: round.payout,
     netResult,
     outcome,
-    playerHands: [
-      {
-        cards: round.hands.player.cards,
-        score: scoreHand(round.hands.player.cards)
-      }
-    ],
+    playerHands: getDemoPlayerHands(round).map((hand) => ({
+      cards: hand.cards,
+      score: scoreHand(hand.cards),
+      bet: hand.bet,
+      outcome: hand.outcome,
+      payout: hand.payout
+    })),
     dealerHand: {
       cards: round.hands.dealer.cards,
       score: scoreHand(round.hands.dealer.cards)
@@ -278,6 +376,7 @@ function finishDemoRound(session, round) {
 }
 
 function createDemoRound(sessionId, playerId, bet) {
+  const playerCards = [drawCard(), drawCard()];
   const round = {
     id: `${sessionId}:${Date.now()}`,
     sessionId,
@@ -288,23 +387,27 @@ function createDemoRound(sessionId, playerId, bet) {
     payout: 0,
     createdAt: new Date().toISOString(),
     finishedAt: null,
-    actions: ["hit", "stand", "double"],
+    actions: [],
+    activeHandIndex: 0,
     hands: {
-      player: { cards: [drawCard(), drawCard()] },
+      player: { cards: playerCards },
       dealer: { cards: [drawCard(), drawCard()] }
-    }
+    },
+    playerHands: [createDemoPlayerHand(playerCards, bet)]
   };
 
-  const playerScore = scoreHand(round.hands.player.cards);
+  const playerScore = scoreHand(playerCards);
   const dealerScore = scoreHand(round.hands.dealer.cards);
 
   if (playerScore.isBlackjack || dealerScore.isBlackjack) {
     const resolution = resolveRound(playerScore, dealerScore, bet, true);
-    round.status = "finished";
-    round.finishedAt = new Date().toISOString();
-    round.actions = [];
-    round.outcome = resolution.outcome;
-    round.payout = resolution.payout;
+    round.playerHands[0].outcome = resolution.outcome;
+    round.playerHands[0].payout = resolution.payout;
+    finalizeDemoRoundState(round);
+  }
+
+  if (round.status === "player_turn") {
+    updateDemoActions(round);
   }
 
   return round;
@@ -324,18 +427,33 @@ function runDealerTurn(round) {
     round.hands.dealer.cards.push(drawCard());
   }
 
-  const resolution = resolveRound(
-    scoreHand(round.hands.player.cards),
-    scoreHand(round.hands.dealer.cards),
-    round.bet
+  const dealerScore = scoreHand(round.hands.dealer.cards);
+  getDemoPlayerHands(round).forEach((hand) => {
+    if (hand.outcome) {
+      return;
+    }
+
+    const resolution = resolveRound(scoreHand(hand.cards), dealerScore, hand.bet);
+    hand.outcome = resolution.outcome;
+    hand.payout = resolution.payout;
+  });
+
+  finalizeDemoRoundState(round);
+  return round;
+}
+
+function advanceDemoHand(round) {
+  const nextHandIndex = getDemoPlayerHands(round).findIndex(
+    (hand, index) => index > (round.activeHandIndex ?? 0) && !hand.isStanding && !scoreHand(hand.cards).isBust
   );
 
-  round.status = "finished";
-  round.finishedAt = new Date().toISOString();
-  round.actions = [];
-  round.outcome = resolution.outcome;
-  round.payout = resolution.payout;
-  return round;
+  if (nextHandIndex !== -1) {
+    round.activeHandIndex = nextHandIndex;
+    updateDemoActions(round);
+    return round;
+  }
+
+  return runDealerTurn(round);
 }
 
 function deriveWsUrl() {
@@ -443,41 +561,66 @@ export async function applyRoundAction({ session, action, isDemo }) {
           cards: session.currentRound.hands.dealer.cards.filter((card) => !card.hidden)
         }
       },
-      actions: [...session.currentRound.actions]
+      actions: [...session.currentRound.actions],
+      playerHands: (session.currentRound.playerHands || []).map((hand) => ({
+        ...hand,
+        cards: [...hand.cards]
+      }))
     };
 
     if (action === "hit") {
-      round.hands.player.cards.push(drawCard());
-      const playerScore = scoreHand(round.hands.player.cards);
-      round.actions = ["hit", "stand"];
-      if (playerScore.isBust) {
-        round.status = "finished";
-        round.finishedAt = new Date().toISOString();
-        round.actions = [];
-        round.outcome = "dealer_win";
-        round.payout = 0;
-        return finishDemoRound(session, round);
+      const hand = getDemoActiveHand(round);
+      hand.cards.push(drawCard());
+      if (scoreHand(hand.cards).isBust) {
+        hand.outcome = "dealer_win";
+        hand.payout = 0;
+        hand.isStanding = true;
+        return finishDemoRound(session, advanceDemoHand(round));
       }
+
+      updateDemoActions(round);
     }
 
     if (action === "double") {
-      round.bet *= 2;
-      round.hands.player.cards.push(drawCard());
-      const playerScore = scoreHand(round.hands.player.cards);
-      if (playerScore.isBust) {
-        round.status = "finished";
-        round.finishedAt = new Date().toISOString();
-        round.actions = [];
-        round.outcome = "dealer_win";
-        round.payout = 0;
-        return finishDemoRound(session, round);
+      const hand = getDemoActiveHand(round);
+      hand.bet *= 2;
+      hand.doubled = true;
+      round.bet += hand.bet / 2;
+      hand.cards.push(drawCard());
+
+      if (scoreHand(hand.cards).isBust) {
+        hand.outcome = "dealer_win";
+        hand.payout = 0;
+        hand.isStanding = true;
+        return finishDemoRound(session, advanceDemoHand(round));
       }
 
-      return finishDemoRound(session, runDealerTurn(round));
+      hand.isStanding = true;
+      return finishDemoRound(session, advanceDemoHand(round));
+    }
+
+    if (action === "split") {
+      const hand = getDemoActiveHand(round);
+      if (!canSplitDemoHand(hand) || getDemoPlayerHands(round).length !== 1) {
+        throw new Error("Split is only allowed on the opening pair");
+      }
+
+      const [firstCard, secondCard] = hand.cards;
+      const splitBet = hand.bet;
+      const firstHand = createDemoPlayerHand([firstCard, drawCard()], splitBet, { isSplitHand: true });
+      const secondHand = createDemoPlayerHand([secondCard, drawCard()], splitBet, { isSplitHand: true });
+
+      round.playerHands = [firstHand, secondHand];
+      round.hands.player.cards = firstHand.cards;
+      round.bet += splitBet;
+      round.activeHandIndex = 0;
+      updateDemoActions(round);
     }
 
     if (action === "stand") {
-      return finishDemoRound(session, runDealerTurn(round));
+      const hand = getDemoActiveHand(round);
+      hand.isStanding = true;
+      return finishDemoRound(session, advanceDemoHand(round));
     }
 
     return {
