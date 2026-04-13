@@ -1,5 +1,4 @@
 import { motion } from "framer-motion";
-import { useTranslation } from "react-i18next";
 
 const suitMap = {
   hearts: "♥",
@@ -9,20 +8,19 @@ const suitMap = {
 };
 
 export default function Card({ card, index = 0, compact = false }) {
-  const { t } = useTranslation();
-  const suit = suitMap[card.suit] ?? card.suit ?? "";
-  const rank = card.rank ?? card.value ?? "";
+  const suit = suitMap[card?.suit] ?? card?.suit ?? "";
+  const rank = card?.rank ?? card?.value ?? "";
   const isRed = suit === "♥" || suit === "♦";
 
   return (
     <motion.div
-      className={`card ${compact ? "card-compact" : ""} ${card.hidden ? "card-hidden" : ""}`}
-      initial={{ opacity: 0, y: -26, rotate: -9, scale: 0.88 }}
+      className={`playing-card ${compact ? "compact" : ""} ${card?.hidden ? "hidden" : ""}`}
+      initial={{ opacity: 0, y: 10, rotate: -4, scale: 0.96 }}
       animate={{ opacity: 1, y: 0, rotate: 0, scale: 1 }}
-      transition={{ type: "spring", stiffness: 280, damping: 24, delay: index * 0.05 }}
+      transition={{ duration: 0.2, delay: index * 0.04 }}
     >
-      {card.hidden ? (
-        <div className="card-back-pattern" aria-label={t("table.cards")} />
+      {card?.hidden ? (
+        <div className="card-back" aria-hidden="true" />
       ) : (
         <>
           <div className={`card-corner ${isRed ? "red" : ""}`}>

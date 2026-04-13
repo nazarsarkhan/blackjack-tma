@@ -1,42 +1,37 @@
 import Card from "./Card";
-import { useTranslation } from "react-i18next";
 
 export default function HandPanel({
   title,
   subtitle,
   score,
   cards,
-  accent = "gold",
   bet = null,
   status = null,
-  active = false,
-  compactCards = false
+  tone = "player",
+  compact = false
 }) {
-  const { t } = useTranslation();
-
   return (
-    <section className={`hand-panel hand-panel-${accent}${active ? " hand-panel-active" : ""}`}>
-      <div className="hand-header">
-        <div>
-          <p className="eyebrow">{subtitle}</p>
-          <h2>{title}</h2>
-          {(bet !== null || status) && (
-            <div className="hand-meta">
-              {bet !== null && <span className="hand-bet">{t("table.bet")} {bet}</span>}
-              {status && <span className="hand-state">{status}</span>}
-            </div>
-          )}
+    <section className={`hand-panel ${tone}`}>
+      <header className="hand-header">
+        <div className="hand-copy">
+          <strong>{title}</strong>
+          <span>{subtitle}</span>
         </div>
-        <div className="score-chip">{score?.total ?? "?"}</div>
-      </div>
 
-      <div className="cards-row">
+        <div className="hand-meta">
+          {bet !== null ? <span className="hand-bet">{bet}</span> : null}
+          {status ? <span className="hand-status">{status}</span> : null}
+          <span className="hand-score">{score?.total ?? "?"}</span>
+        </div>
+      </header>
+
+      <div className={`cards-row ${compact ? "compact" : ""}`}>
         {cards.map((card, index) => (
           <Card
             key={`${card.code ?? card.suit ?? "hidden"}-${card.rank ?? index}-${index}`}
             card={card}
             index={index}
-            compact={compactCards}
+            compact={compact}
           />
         ))}
       </div>
