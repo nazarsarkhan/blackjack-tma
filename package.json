@@ -1,0 +1,22 @@
+{
+  "name": "blackjack-tma",
+  "version": "1.0.0",
+  "description": "Telegram Mini App Blackjack backend",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test",
+    "init-db": "node scripts/init-db.js",
+    "demo-db": "node scripts/demo-db.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
